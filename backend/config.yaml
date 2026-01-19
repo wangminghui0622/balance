@@ -1,0 +1,25 @@
+# 应用配置
+database:
+  host: 42.192.129.44
+  port: 3306
+  user: root
+  password: test789
+  dbname: balance
+  charset: utf8mb4
+
+redis:
+  host: 42.192.129.44
+  port: 6379
+  password: "test@789"
+  db: 0
+
+jwt:
+  secret: balance@!*#6250198
+  expiration: 15d
+
+# 服务端口配置
+services:
+  admin:
+    port: 19090
+  app:
+    port: 19091
