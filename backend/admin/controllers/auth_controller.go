@@ -3,6 +3,7 @@ package controllers
 import (
 	"balance/admin/dto"
 	"balance/admin/services"
+	"balance/internal/constants"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -25,17 +26,16 @@ func (ctrl *AuthController) Login(c *gin.Context) {
 	var req dto.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, dto.Response{
-			Code:    400,
+			Code:    constants.HTTPStatusBadRequest,
 			Message: "参数错误: " + err.Error(),
 		})
 		return
 	}
-
 	admin, token, err := ctrl.authService.Login(c.Request.Context(), req.Username, req.Password, c.ClientIP())
 	if err != nil {
-		code := http.StatusUnauthorized
+		code := constants.HTTPStatusUnauthorized
 		if err.Error() == "账号已被禁用" {
-			code = http.StatusForbidden
+			code = constants.HTTPStatusForbidden
 		}
 		c.JSON(code, dto.Response{
 			Code:    code,
@@ -45,7 +45,7 @@ func (ctrl *AuthController) Login(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, dto.LoginResponse{
-		Code:    200,
+		Code:    constants.ResponseCodeSuccess,
 		Message: "success",
 		Data: dto.LoginData{
 			Token:  token,
@@ -59,7 +59,7 @@ func (ctrl *AuthController) Register(c *gin.Context) {
 	var req dto.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, dto.Response{
-			Code:    400,
+			Code:    constants.HTTPStatusBadRequest,
 			Message: "参数错误: " + err.Error(),
 		})
 		return
@@ -67,9 +67,9 @@ func (ctrl *AuthController) Register(c *gin.Context) {
 
 	_, err := ctrl.authService.Register(c.Request.Context(), req.Username, req.Password, req.Email, req.UserType)
 	if err != nil {
-		code := http.StatusBadRequest
+		code := constants.HTTPStatusBadRequest
 		if err.Error() == "生成用户ID失败" || err.Error() == "创建用户失败" {
-			code = http.StatusInternalServerError
+			code = constants.HTTPStatusInternalServerError
 		}
 		c.JSON(code, dto.Response{
 			Code:    code,
@@ -79,7 +79,7 @@ func (ctrl *AuthController) Register(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, dto.RegisterResponse{
-		Code:    200,
+		Code:    constants.ResponseCodeSuccess,
 		Message: "注册成功",
 	})
 }

@@ -1,8 +1,9 @@
 package services
 
 import (
+	"balance/internal/constants"
+	"balance/internal/models"
 	shareUtils "balance/internal/utils"
-	"balance/models"
 	"context"
 	"errors"
 	"time"
@@ -46,7 +47,7 @@ func (s *AuthService) Login(ctx context.Context, username, password, clientIP st
 	}
 
 	// 检查状态
-	if admin.Status != 1 {
+	if admin.Status != constants.UserStatusNormal {
 		return nil, "", errors.New("账号已被禁用")
 	}
 
@@ -65,8 +66,8 @@ func (s *AuthService) Login(ctx context.Context, username, password, clientIP st
 // Register 注册
 func (s *AuthService) Register(ctx context.Context, username, password, email string, userType int8) (*models.Admin, error) {
 	// 验证用户类型
-	if userType != 1 && userType != 5 {
-		return nil, errors.New("用户类型错误，1=店铺，5=运营")
+	if !constants.IsValidUserTypeForRegister(userType) {
+		return nil, errors.New("用户类型错误，只允许店铺和运营")
 	}
 
 	// 检查用户名是否存在
@@ -91,10 +92,10 @@ func (s *AuthService) Register(ctx context.Context, username, password, email st
 
 	// 生成ID
 	var userID int64
-	if userType == 1 {
+	if userType == constants.UserTypeShopOwner {
 		// 店铺
 		userID, err = s.idGenerator.GenerateShopOwnerID(ctx)
-	} else if userType == 5 {
+	} else if userType == constants.UserTypeOperator {
 		// 运营
 		userID, err = s.idGenerator.GenerateOperatorID(ctx)
 	}
@@ -121,8 +122,8 @@ func (s *AuthService) Register(ctx context.Context, username, password, email st
 		Salt:     salt,
 		Hash:     hash,
 		Email:    email,
-		Status:   1,
-		Language: "zh",
+		Status:   constants.DefaultStatus,
+		Language: constants.DefaultLanguage,
 	}
 
 	err = s.adminRepo.Create(admin)

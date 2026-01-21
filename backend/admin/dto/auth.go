@@ -1,5 +1,7 @@
 package dto
 
+import "balance/internal/constants"
+
 // LoginRequest 登录请求
 type LoginRequest struct {
 	Username string `json:"username" binding:"required"`
@@ -11,7 +13,21 @@ type RegisterRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
 	Email    string `json:"email" binding:"required,email"`
-	UserType int8   `json:"userType" binding:"required"` // 1=店铺, 5=运营
+	UserType int8   `json:"userType" binding:"required"` // constants.UserTypeShopOwner=店铺, constants.UserTypeOperator=运营
+}
+
+// GetUserTypeName 获取用户类型名称
+func (r *RegisterRequest) GetUserTypeName() string {
+	switch r.UserType {
+	case constants.UserTypeShopOwner:
+		return "店铺"
+	case constants.UserTypeOperator:
+		return "运营"
+	case constants.UserTypePlatform:
+		return "平台"
+	default:
+		return "未知"
+	}
 }
 
 // LoginResponse 登录响应

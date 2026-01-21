@@ -25,6 +25,13 @@ type Config struct {
 	JWTSecret     string
 	JWTExpiration time.Duration
 	Port          string
+	// Shopee API配置
+	ShopeePartnerID   int64
+	ShopeePartnerKey  string
+	ShopeeShopID      int64
+	ShopeeAccessToken string
+	ShopeeIsSandbox   bool
+	ShopeeRedirect    string
 }
 
 // fileConfig 对应 config.yaml 结构
@@ -54,6 +61,14 @@ type fileConfig struct {
 			Port string `yaml:"port"`
 		} `yaml:"app"`
 	} `yaml:"services"`
+	Shopee struct {
+		PartnerID   int64  `yaml:"partner_id"`
+		PartnerKey  string `yaml:"partner_key"`
+		ShopID      int64  `yaml:"shop_id"`
+		AccessToken string `yaml:"access_token"`
+		IsSandbox   bool   `yaml:"is_sandbox"`
+		Redirect    string `yaml:"redirect"`
+	} `yaml:"shopee"`
 }
 
 var (
@@ -65,14 +80,11 @@ var (
 func loadFileConfig() *fileConfig {
 	cfgOnce.Do(func() {
 		loadedConfig = &fileConfig{}
-
-		// 尝试多个可能的配置文件路径
 		configPaths := []string{
-			"config.yaml",                    // 当前目录
-			"backend/config.yaml",            // 从项目根目录
-			"../config.yaml",                 // 上一级目录
+			"config.yaml",         // 当前目录
+			"backend/config.yaml", // 从项目根目录
+			"../config.yaml",      // 上一级目录
 		}
-
 		var data []byte
 		var err error
 		for _, path := range configPaths {
@@ -81,7 +93,6 @@ func loadFileConfig() *fileConfig {
 				break
 			}
 		}
-
 		if err != nil {
 			// 没有配置文件则使用空配置，后续走默认值
 			return
@@ -133,13 +144,66 @@ func LoadAdminConfig() *Config {
 	}
 	port := getEnv("ADMIN_PORT", defaultAdminPort)
 
+	// Shopee API配置
+	shopeePartnerID := int64(0)
+	if fc != nil && fc.Shopee.PartnerID > 0 {
+		shopeePartnerID = fc.Shopee.PartnerID
+	}
+	if envPartnerID := getEnv("SHOPEE_PARTNER_ID", ""); envPartnerID != "" {
+		if id, err := strconv.ParseInt(envPartnerID, 10, 64); err == nil {
+			shopeePartnerID = id
+		}
+	}
+
+	shopeePartnerKey := fc.Shopee.PartnerKey
+	if envPartnerKey := getEnv("SHOPEE_PARTNER_KEY", ""); envPartnerKey != "" {
+		shopeePartnerKey = envPartnerKey
+	}
+
+	shopeeShopID := int64(0)
+	if fc.Shopee.ShopID > 0 {
+		shopeeShopID = fc.Shopee.ShopID
+	}
+	if envShopID := getEnv("SHOPEE_SHOP_ID", ""); envShopID != "" {
+		if id, err := strconv.ParseInt(envShopID, 10, 64); err == nil {
+			shopeeShopID = id
+		}
+	}
+
+	shopeeAccessToken := fc.Shopee.AccessToken
+	if envToken := getEnv("SHOPEE_ACCESS_TOKEN", ""); envToken != "" {
+		shopeeAccessToken = envToken
+	}
+
+	shopeeIsSandbox := false
+	if fc != nil {
+		shopeeIsSandbox = fc.Shopee.IsSandbox
+	}
+	if envSandbox := getEnv("SHOPEE_IS_SANDBOX", ""); envSandbox != "" {
+		shopeeIsSandbox = envSandbox == "true" || envSandbox == "1"
+	}
+
+	shopeeRedirect := ""
+	if fc != nil {
+		shopeeRedirect = fc.Shopee.Redirect
+	}
+	if envRedirect := getEnv("SHOPEE_REDIRECT", ""); envRedirect != "" {
+		shopeeRedirect = envRedirect
+	}
+
 	return &Config{
-		DBDSN:         dsn,
-		RedisAddr:     fmt.Sprintf("%s:%s", redisHost, redisPort),
-		RedisPassword: redisPassword,
-		JWTSecret:     jwtSecret,
-		JWTExpiration: jwtExpiration,
-		Port:          port,
+		DBDSN:             dsn,
+		RedisAddr:         fmt.Sprintf("%s:%s", redisHost, redisPort),
+		RedisPassword:     redisPassword,
+		JWTSecret:         jwtSecret,
+		JWTExpiration:     jwtExpiration,
+		Port:              port,
+		ShopeePartnerID:   shopeePartnerID,
+		ShopeePartnerKey:  shopeePartnerKey,
+		ShopeeShopID:      shopeeShopID,
+		ShopeeAccessToken: shopeeAccessToken,
+		ShopeeIsSandbox:   shopeeIsSandbox,
+		ShopeeRedirect:    shopeeRedirect,
 	}
 }
 

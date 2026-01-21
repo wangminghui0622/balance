@@ -4,7 +4,7 @@ import (
 	"balance/admin/routes"
 	"balance/internal/config"
 	"balance/internal/database"
-	"balance/models"
+	"balance/internal/models"
 	"log"
 	"strings"
 )
@@ -63,13 +63,21 @@ func extractDBNameFromDSN(dsn string) string {
 func main() {
 	// 加载配置
 	cfg := config.LoadAdminConfig()
-	
+
 	// 打印配置信息（隐藏密码，用于调试）
-	log.Printf("数据库配置: host=%s, port=%s, user=%s, dbname=%s", 
-		extractHostFromDSN(cfg.DBDSN), 
+	log.Printf("数据库配置: host=%s, port=%s, user=%s, dbname=%s",
+		extractHostFromDSN(cfg.DBDSN),
 		extractPortFromDSN(cfg.DBDSN),
 		extractUserFromDSN(cfg.DBDSN),
 		extractDBNameFromDSN(cfg.DBDSN))
+	
+	// 打印 Shopee 配置信息（用于调试）
+	log.Printf("Shopee 配置: partner_id=%d, partner_key长度=%d, shop_id=%d, is_sandbox=%v, redirect=%s",
+		cfg.ShopeePartnerID,
+		len(cfg.ShopeePartnerKey),
+		cfg.ShopeeShopID,
+		cfg.ShopeeIsSandbox,
+		cfg.ShopeeRedirect)
 
 	// 初始化数据库
 	db, err := database.InitDB(cfg.DBDSN)

@@ -23,3 +23,15 @@ services:
     port: 19090
   app:
     port: 19091
+
+# Shopee API配置（可选，也可以通过环境变量配置）
+shopee:
+  partner_id: 1203446      # Partner ID（从虾皮开放平台获取，与 Java 项目一致）
+  partner_key: "shpk724b6a656d626b696b756345464e6b614d524664716c61525a4e4e4f466c"    # Partner Key（从虾皮开放平台获取，与 Java 项目一致）
+  shop_id: 226349698         # Shop ID（店铺ID）
+  access_token: ""    # Access Token（授权令牌）
+  is_sandbox: true   # 是否使用沙箱环境（true=沙箱，false=正式）
+  # redirect: "https://kx9y.com/api/v1/balance/admin/shopee/auth/callback"  # 授权回调地址（域名需与 Shopee 控制台配置一致）
+  # 如果 Shopee 控制台配置的是 www.balanpay.com，可以临时使用下面的配置测试：
+  # redirect: "https://www.balanpay.com/api/v1/balance/admin/shopee/auth/callback"
+  redirect: "https://kx9y.com"  # 授权回调地址（只填域名，与 Shopee 控制台配置一致，路径在代码中动态添加）
