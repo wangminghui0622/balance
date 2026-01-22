@@ -43,7 +43,6 @@ func (ctrl *AuthController) Login(c *gin.Context) {
 		})
 		return
 	}
-
 	c.JSON(http.StatusOK, dto.LoginResponse{
 		Code:    constants.ResponseCodeSuccess,
 		Message: "success",

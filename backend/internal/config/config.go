@@ -26,12 +26,13 @@ type Config struct {
 	JWTExpiration time.Duration
 	Port          string
 	// Shopee API配置
-	ShopeePartnerID   int64
-	ShopeePartnerKey  string
-	ShopeeShopID      int64
-	ShopeeAccessToken string
-	ShopeeIsSandbox   bool
-	ShopeeRedirect    string
+	ShopeePartnerID    int64
+	ShopeePartnerKey   string
+	ShopeeShopID       int64
+	ShopeeAccessToken  string
+	ShopeeRefreshToken string
+	ShopeeIsSandbox    bool
+	ShopeeRedirect     string
 }
 
 // fileConfig 对应 config.yaml 结构
@@ -62,12 +63,13 @@ type fileConfig struct {
 		} `yaml:"app"`
 	} `yaml:"services"`
 	Shopee struct {
-		PartnerID   int64  `yaml:"partner_id"`
-		PartnerKey  string `yaml:"partner_key"`
-		ShopID      int64  `yaml:"shop_id"`
-		AccessToken string `yaml:"access_token"`
-		IsSandbox   bool   `yaml:"is_sandbox"`
-		Redirect    string `yaml:"redirect"`
+		PartnerID    int64  `yaml:"partner_id"`
+		PartnerKey   string `yaml:"partner_key"`
+		ShopID       int64  `yaml:"shop_id"`
+		AccessToken  string `yaml:"access_token"`
+		RefreshToken string `yaml:"refresh_token"`
+		IsSandbox    bool   `yaml:"is_sandbox"`
+		Redirect     string `yaml:"redirect"`
 	} `yaml:"shopee"`
 }
 
@@ -175,6 +177,11 @@ func LoadAdminConfig() *Config {
 		shopeeAccessToken = envToken
 	}
 
+	shopeeRefreshToken := fc.Shopee.RefreshToken
+	if envRefreshToken := getEnv("SHOPEE_REFRESH_TOKEN", ""); envRefreshToken != "" {
+		shopeeRefreshToken = envRefreshToken
+	}
+
 	shopeeIsSandbox := false
 	if fc != nil {
 		shopeeIsSandbox = fc.Shopee.IsSandbox
@@ -192,18 +199,19 @@ func LoadAdminConfig() *Config {
 	}
 
 	return &Config{
-		DBDSN:             dsn,
-		RedisAddr:         fmt.Sprintf("%s:%s", redisHost, redisPort),
-		RedisPassword:     redisPassword,
-		JWTSecret:         jwtSecret,
-		JWTExpiration:     jwtExpiration,
-		Port:              port,
-		ShopeePartnerID:   shopeePartnerID,
-		ShopeePartnerKey:  shopeePartnerKey,
-		ShopeeShopID:      shopeeShopID,
-		ShopeeAccessToken: shopeeAccessToken,
-		ShopeeIsSandbox:   shopeeIsSandbox,
-		ShopeeRedirect:    shopeeRedirect,
+		DBDSN:              dsn,
+		RedisAddr:          fmt.Sprintf("%s:%s", redisHost, redisPort),
+		RedisPassword:      redisPassword,
+		JWTSecret:          jwtSecret,
+		JWTExpiration:      jwtExpiration,
+		Port:               port,
+		ShopeePartnerID:    shopeePartnerID,
+		ShopeePartnerKey:   shopeePartnerKey,
+		ShopeeShopID:       shopeeShopID,
+		ShopeeAccessToken:  shopeeAccessToken,
+		ShopeeRefreshToken: shopeeRefreshToken,
+		ShopeeIsSandbox:    shopeeIsSandbox,
+		ShopeeRedirect:     shopeeRedirect,
 	}
 }
 

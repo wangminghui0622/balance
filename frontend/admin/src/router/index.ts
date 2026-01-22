@@ -1,39 +1,45 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
+import { STORAGE_KEYS, USER_TYPE, ROUTE_PATH, getUserType, getRouteByUserType } from '@share/constants'
 
 const routes: RouteRecordRaw[] = [
   {
-    path: '/login',
+    path: ROUTE_PATH.LOGIN,
     name: 'login',
     component: () => import('../views/Login.vue')
   },
   {
-    path: '/register',
+    path: ROUTE_PATH.REGISTER,
     name: 'register',
     component: () => import('../views/Register.vue')
+  },
+  {
+    path: '/shopee/auth',
+    name: 'shopee-auth',
+    component: () => import('../views/ShopeeAuth.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/shopee/auth/callback',
+    name: 'shopee-auth-callback',
+    component: () => import('../views/ShopeeCallback.vue')
   },
   {
     path: '/',
     redirect: () => {
       // 根据用户ID前缀重定向
-      const userId = localStorage.getItem('userId')
+      const userId = localStorage.getItem(STORAGE_KEYS.USER_ID)
       if (!userId) {
-        return '/login'
+        return ROUTE_PATH.LOGIN
       }
-      if (userId.startsWith('9')) {
-        return '/platform'
-      } else if (userId.startsWith('5')) {
-        return '/operator'
-      } else if (userId.startsWith('1')) {
-        return '/shopowner'
-      }
-      return '/login'
+      const userType = getUserType(userId)
+      return getRouteByUserType(userType)
     }
   },
   {
-    path: '/platform',
+    path: ROUTE_PATH.PLATFORM,
     component: () => import('@platform/layouts/PlatformLayout.vue'),
-    meta: { requiresAuth: true, userType: '9' },
+    meta: { requiresAuth: true, userType: USER_TYPE.PLATFORM },
     children: [
       {
         path: '',
@@ -43,9 +49,9 @@ const routes: RouteRecordRaw[] = [
     ]
   },
   {
-    path: '/operator',
+    path: ROUTE_PATH.OPERATOR,
     component: () => import('@operator/layouts/OperatorLayout.vue'),
-    meta: { requiresAuth: true, userType: '5' },
+    meta: { requiresAuth: true, userType: USER_TYPE.OPERATOR },
     children: [
       {
         path: '',
@@ -55,9 +61,9 @@ const routes: RouteRecordRaw[] = [
     ]
   },
   {
-    path: '/shopowner',
+    path: ROUTE_PATH.SHOPOWNER,
     component: () => import('@shopowner/layouts/ShopownerLayout.vue'),
-    meta: { requiresAuth: true, userType: '1' },
+    meta: { requiresAuth: true, userType: USER_TYPE.SHOPOWNER },
     children: [
       {
         path: '',
@@ -86,21 +92,14 @@ const router = createRouter({
 
 // 路由守卫
 router.beforeEach((to, _from, next) => {
-  const token = localStorage.getItem('token')
-  const userId = localStorage.getItem('userId')
+  const token = localStorage.getItem(STORAGE_KEYS.TOKEN)
+  const userId = localStorage.getItem(STORAGE_KEYS.USER_ID)
 
   // 如果访问登录页且已登录，根据用户类型重定向
-  if (to.path === '/login') {
+  if (to.path === ROUTE_PATH.LOGIN) {
     if (token && userId) {
-      if (userId.startsWith('9')) {
-        next('/platform')
-      } else if (userId.startsWith('5')) {
-        next('/operator')
-      } else if (userId.startsWith('1')) {
-        next('/shopowner')
-      } else {
-        next()
-      }
+      const userType = getUserType(userId)
+      next(getRouteByUserType(userType))
     } else {
       next()
     }
@@ -110,23 +109,17 @@ router.beforeEach((to, _from, next) => {
   // 需要认证的路由
   if (to.meta.requiresAuth) {
     if (!token || !userId) {
-      next('/login')
+      next(ROUTE_PATH.LOGIN)
       return
     }
 
     // 检查用户类型是否匹配
     const requiredUserType = to.meta.userType as string
-    if (!userId.startsWith(requiredUserType)) {
+    const currentUserType = getUserType(userId)
+    
+    if (!currentUserType || currentUserType !== requiredUserType) {
       // 用户类型不匹配，重定向到对应的页面
-      if (userId.startsWith('9')) {
-        next('/platform')
-      } else if (userId.startsWith('5')) {
-        next('/operator')
-      } else if (userId.startsWith('1')) {
-        next('/shopowner')
-      } else {
-        next('/login')
-      }
+      next(getRouteByUserType(currentUserType))
       return
     }
   }

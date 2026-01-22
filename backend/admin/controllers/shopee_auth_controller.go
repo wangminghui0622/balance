@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"balance/internal/config"
+	"balance/internal/models"
 	"balance/internal/utils"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -12,39 +13,89 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // ShopeeAuthController 处理虾皮授权回调和换取 access_token
 type ShopeeAuthController struct {
 	cfg *config.Config
+	db  *gorm.DB
 }
 
 // NewShopeeAuthController 创建 Shopee 授权控制器
-func NewShopeeAuthController(cfg *config.Config) *ShopeeAuthController {
-	return &ShopeeAuthController{cfg: cfg}
+func NewShopeeAuthController(cfg *config.Config, db *gorm.DB) *ShopeeAuthController {
+	return &ShopeeAuthController{cfg: cfg, db: db}
+}
+
+// getShopeeConfig 从数据库获取 Shopee 配置，如果数据库中没有则从配置文件读取（兼容）
+func (ctrl *ShopeeAuthController) getShopeeConfig(shopID int64) (*models.ShopeeToken, error) {
+	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
+	token, err := tokenRepo.GetByShopID(shopID)
+	if err == nil && token != nil {
+		return token, nil
+	}
+	
+	// 数据库中没有，尝试从配置文件读取（兼容旧配置）
+	if ctrl.cfg.ShopeePartnerID > 0 && ctrl.cfg.ShopeePartnerKey != "" {
+		return &models.ShopeeToken{
+			ShopID:     shopID,
+			PartnerID:  ctrl.cfg.ShopeePartnerID,
+			PartnerKey: ctrl.cfg.ShopeePartnerKey,
+			IsSandbox:  ctrl.cfg.ShopeeIsSandbox,
+			Redirect:   ctrl.cfg.ShopeeRedirect,
+		}, nil
+	}
+	
+	return nil, fmt.Errorf("未找到 shop_id=%d 的 Shopee 配置", shopID)
 }
 
 // GenerateAuthURL 生成虾皮店铺授权链接，方便在浏览器里直接打开
 // GET /api/v1/balance/admin/shopee/auth/url
 func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
-	if ctrl.cfg.ShopeePartnerID == 0 {
+	// 从查询参数或配置中获取 shop_id
+	shopID := ctrl.cfg.ShopeeShopID
+	shopIDStr := c.Query("shop_id")
+	if shopIDStr != "" {
+		if id, err := strconv.ParseInt(shopIDStr, 10, 64); err == nil {
+			shopID = id
+		}
+	}
+	if shopID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    -1,
-			"message": "Shopee Partner 配置不完整，请先在 config.yaml 中配置 shopee.partner_id",
+			"message": "请提供 shop_id 参数或在数据库中配置 shop_id",
 		})
 		return
 	}
 
-	// 获取回调地址：优先使用配置文件中的 redirect，否则使用当前请求的域名动态生成
-	// 注意：Java 项目中 redirect 配置只有域名（如 https://www.balanpay.com），路径在代码中动态添加
+	// 从数据库获取 Shopee 配置
+	shopeeConfig, err := ctrl.getShopeeConfig(shopID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "未找到 Shopee 配置: " + err.Error(),
+		})
+		return
+	}
+
+	if shopeeConfig.PartnerID == 0 || shopeeConfig.PartnerKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "Shopee Partner 配置不完整，请先在数据库中配置 partner_id / partner_key",
+		})
+		return
+	}
+
+	// 获取回调地址：优先使用数据库中的 redirect，否则使用当前请求的域名动态生成
 	var baseRedirectURL string
 	var redirectDomainOnly string // 只包含域名，不包含协议（如 kx9y.com）
-	if ctrl.cfg.ShopeeRedirect != "" {
-		// 使用配置文件中的 redirect（可能包含协议，如 https://kx9y.com）
-		baseRedirectURL = ctrl.cfg.ShopeeRedirect
+	if shopeeConfig.Redirect != "" {
+		// 使用数据库中的 redirect（可能包含协议，如 https://kx9y.com）
+		baseRedirectURL = shopeeConfig.Redirect
 		
 		// 解析出纯域名部分（不包含协议）
 		parsedURL, err := url.Parse(baseRedirectURL)
@@ -55,7 +106,7 @@ func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
 			redirectDomainOnly = baseRedirectURL
 		}
 		
-		log.Printf("使用配置文件中的 redirect: %s", baseRedirectURL)
+		log.Printf("使用数据库中的 redirect: %s", baseRedirectURL)
 		log.Printf("提取的纯域名（不含协议）: %s", redirectDomainOnly)
 	} else {
 		// 动态生成回调地址的域名部分
@@ -74,7 +125,7 @@ func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
 
 	// 沙箱或正式环境的授权地址（与 Java 项目保持一致）
 	baseAuthURL := "https://partner.shopeemobile.com/api/v2/shop/auth_partner"
-	if ctrl.cfg.ShopeeIsSandbox {
+	if shopeeConfig.IsSandbox {
 		baseAuthURL = "https://openplatform.sandbox.test-stable.shopee.cn/api/v2/shop/auth_partner"
 	}
 
@@ -93,20 +144,20 @@ func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
 	
 	// 方式1：签名字符串 = partnerId + path + timestamp（不包含 redirect）
 	// 这是 Shopee 官方文档的标准格式
-	signString1 := strconv.FormatInt(ctrl.cfg.ShopeePartnerID, 10) + path + timestampStr
+	signString1 := strconv.FormatInt(shopeeConfig.PartnerID, 10) + path + timestampStr
 	
 	// 方式2：签名字符串 = partnerId + path + timestamp + redirect（包含 redirect）
 	// 某些实现可能会包含 redirect，但官方文档说不需要
-	signString2 := strconv.FormatInt(ctrl.cfg.ShopeePartnerID, 10) + path + timestampStr + redirectForSign
+	signString2 := strconv.FormatInt(shopeeConfig.PartnerID, 10) + path + timestampStr + redirectForSign
 	
 	// 方式3：签名字符串 = partnerId + path + timestamp + redirect（包含完整回调URL）
-	signString3 := strconv.FormatInt(ctrl.cfg.ShopeePartnerID, 10) + path + timestampStr + callbackURL
+	signString3 := strconv.FormatInt(shopeeConfig.PartnerID, 10) + path + timestampStr + callbackURL
 	
 	// 方式2已测试报错 "Partner_id is invalid"，说明签名字符串格式可能不对
 	// 回退到方式1（不包含 redirect），这是官方标准格式
 	
 	// 处理 partner_key
-	partnerKeyRaw := ctrl.cfg.ShopeePartnerKey
+	partnerKeyRaw := shopeeConfig.PartnerKey
 	
 	// 尝试三种方式处理 partner_key：
 	// 方式A：保留 shpk 前缀，直接作为字符串（与 ExchangeShopeeToken 一致）
@@ -230,19 +281,19 @@ func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
 	// 方式1：只使用域名（不含协议）
 	redirectOption1 := redirectDomainOnly
 	authURL1 := fmt.Sprintf("%s?partner_id=%d&timestamp=%s&sign=%s&redirect=%s?grantSource=%s",
-		baseAuthURL, ctrl.cfg.ShopeePartnerID, timestampStr, signature,
+		baseAuthURL, shopeeConfig.PartnerID, timestampStr, signature,
 		url.QueryEscape(redirectOption1), grantSource)
-	
+
 	// 方式2：使用域名+协议（与 Java 项目一致）
 	redirectOption2 := baseRedirectURL
 	authURL2 := fmt.Sprintf("%s?partner_id=%d&timestamp=%s&sign=%s&redirect=%s?grantSource=%s",
-		baseAuthURL, ctrl.cfg.ShopeePartnerID, timestampStr, signature,
+		baseAuthURL, shopeeConfig.PartnerID, timestampStr, signature,
 		url.QueryEscape(redirectOption2), grantSource)
-	
+
 	// 方式3：使用完整回调 URL
 	redirectOption3 := callbackURL
 	authURL3 := fmt.Sprintf("%s?partner_id=%d&timestamp=%s&sign=%s&redirect=%s?grantSource=%s",
-		baseAuthURL, ctrl.cfg.ShopeePartnerID, timestampStr, signature,
+		baseAuthURL, shopeeConfig.PartnerID, timestampStr, signature,
 		url.QueryEscape(redirectOption3), grantSource)
 	
 	// 默认使用方式3（完整回调URL），因为方式1（只域名）报错 "redirect url is invalid"
@@ -267,7 +318,7 @@ func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
 	log.Printf("   - 如果控制台允许填完整 URL（如 https://kx9y.com），则配置应该是: https://kx9y.com")
 	log.Printf("2. 确认当前使用的域名: %s", redirectDomainOnly)
 	log.Printf("3. 确认当前使用的完整域名: %s", baseRedirectURL)
-	log.Printf("4. 确认 Shopee 环境: %s", map[bool]string{true: "沙箱环境 (Sandbox)", false: "正式环境 (Production)"}[ctrl.cfg.ShopeeIsSandbox])
+	log.Printf("4. 确认 Shopee 环境: %s", map[bool]string{true: "沙箱环境 (Sandbox)", false: "正式环境 (Production)"}[shopeeConfig.IsSandbox])
 	log.Printf("5. 确认 Shopee 控制台配置的环境与代码中的环境一致（沙箱/正式）")
 	log.Printf("6. 确认 Shopee 控制台配置已保存并等待 5-10 分钟生效")
 	log.Printf("7. 如果控制台配置的是 www.kx9y.com，而代码使用的是 kx9y.com，也会报错")
@@ -275,7 +326,7 @@ func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
 	log.Printf("================================================")
 	
 	log.Printf("========== Shopee 授权链接生成调试信息 ==========")
-	log.Printf("partner_id: %d", ctrl.cfg.ShopeePartnerID)
+	log.Printf("partner_id: %d", shopeeConfig.PartnerID)
 	log.Printf("⚠️  重要：请确认此 partner_id 与 Shopee 控制台中的配置一致")
 	log.Printf("⚠️  控制台显示的 Test Partner_id: 1203446")
 	log.Printf("⚠️  控制台显示的 Live Partner_id: 2014300")
@@ -293,13 +344,13 @@ func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
 		log.Printf("⚠️  控制台应填写: %s (只填域名，不包含协议和路径)", callbackURLParsed.Host)
 		log.Printf("⚠️  或者填写: https://%s (包含协议，不包含路径)", callbackURLParsed.Host)
 		log.Printf("⚠️  当前使用的完整 redirect URL: %s", callbackURL)
-		log.Printf("⚠️  如果控制台配置的是其他域名，请修改 config.yaml 中的 redirect 配置")
+		log.Printf("⚠️  如果控制台配置的是其他域名，请修改数据库中的 redirect 配置")
 	} else {
 		log.Printf("⚠️  解析 callback URL 失败: %v", err)
 	}
 	
 	log.Printf("签名字符串 (partner_id+path+timestamp): %s", signString1)
-	log.Printf("partner_key 原始值: %s", ctrl.cfg.ShopeePartnerKey)
+	log.Printf("partner_key 原始值: %s", shopeeConfig.PartnerKey)
 	log.Printf("partner_key 方式A（保留shpk前缀）长度: %d 字节", len(partnerKeyBytesA))
 	log.Printf("partner_key 方式B（去掉shpk前缀）长度: %d 字节", len(partnerKeyBytesB))
 	if partnerKeyBytesC != nil {
@@ -315,7 +366,7 @@ func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
 		"message":    "生成授权链接成功，在浏览器打开该URL进行授权",
 		"auth_url":   authURL,
 		"callback":   callbackURL,
-		"is_sandbox": ctrl.cfg.ShopeeIsSandbox,
+		"is_sandbox": shopeeConfig.IsSandbox,
 	})
 }
 
@@ -343,47 +394,118 @@ func (ctrl *ShopeeAuthController) AuthCallback(c *gin.Context) {
 	if shopID == 0 {
 		shopID = ctrl.cfg.ShopeeShopID
 	}
-
-	if ctrl.cfg.ShopeePartnerID == 0 || ctrl.cfg.ShopeePartnerKey == "" {
+	if shopID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    -1,
-			"message": "Shopee Partner 配置不完整，请先在 config.yaml 或 环境变量中配置 partner_id / partner_key",
+			"message": "请提供 shop_id 参数",
+		})
+		return
+	}
+
+	// 从数据库获取 Shopee 配置
+	shopeeConfig, err := ctrl.getShopeeConfig(shopID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "未找到 Shopee 配置: " + err.Error(),
+		})
+		return
+	}
+
+	if shopeeConfig.PartnerID == 0 || shopeeConfig.PartnerKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "Shopee Partner 配置不完整，请先在数据库中配置 partner_id / partner_key",
 		})
 		return
 	}
 
 	// 调用工具函数，向虾皮请求 access_token
 	accessToken, refreshToken, expireIn, err := utils.ExchangeShopeeToken(
-		ctrl.cfg.ShopeePartnerID,
-		ctrl.cfg.ShopeePartnerKey,
+		shopeeConfig.PartnerID,
+		shopeeConfig.PartnerKey,
 		shopID,
 		code,
-		ctrl.cfg.ShopeeIsSandbox,
+		shopeeConfig.IsSandbox,
 	)
 	if err != nil {
 		log.Printf("向虾皮换取 access_token 失败: %v", err)
+		// 构建前端错误回调页面 URL
+		scheme := "https"
+		if c.Request.TLS == nil && c.Request.Header.Get("X-Forwarded-Proto") != "https" {
+			scheme = "http"
+		}
+		host := c.Request.Host
+		frontendPath := "/shopee/auth/callback"
+		if strings.Contains(host, "localhost") || strings.Contains(host, "127.0.0.1") || strings.Contains(host, ":") {
+			// 开发环境
+			frontendCallbackURL := fmt.Sprintf("http://%s%s?error=%s",
+				host, frontendPath, url.QueryEscape("向虾皮换取 access_token 失败: "+err.Error()))
+			c.Redirect(http.StatusFound, frontendCallbackURL)
+		} else {
+			// 生产环境
+			frontendCallbackURL := fmt.Sprintf("%s://%s/balance/admin%s?error=%s",
+				scheme, host, frontendPath, url.QueryEscape("向虾皮换取 access_token 失败: "+err.Error()))
+			c.Redirect(http.StatusFound, frontendCallbackURL)
+		}
+		return
+	}
+
+	// 保存 token 到数据库（保留原有的 partner_key 和 redirect 配置）
+	expireAt := time.Now().Add(time.Duration(expireIn) * time.Second)
+	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
+	shopeeToken := &models.ShopeeToken{
+		ShopID:        shopID,
+		PartnerID:     shopeeConfig.PartnerID,
+		PartnerKey:    shopeeConfig.PartnerKey, // 保留原有的 partner_key
+		AccessToken:   accessToken,
+		RefreshToken:  refreshToken,
+		TokenExpireAt: &expireAt,
+		IsSandbox:     shopeeConfig.IsSandbox,
+		Redirect:      shopeeConfig.Redirect, // 保留原有的 redirect
+	}
+
+	err = tokenRepo.CreateOrUpdate(shopeeToken)
+	if err != nil {
+		log.Printf("❌ 保存 token 到数据库失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    -1,
-			"message": "向虾皮换取 access_token 失败: " + err.Error(),
+			"message": "授权成功，但保存 token 到数据库失败: " + err.Error(),
+			"data": gin.H{
+				"shop_id":       shopID,
+				"access_token":  accessToken,
+				"refresh_token": refreshToken,
+				"expire_in":     expireIn,
+				"expire_at":     expireAt.Format(time.RFC3339),
+			},
 		})
 		return
 	}
 
-	// 打日志，方便你在服务日志里直接复制
-	log.Printf("Shopee 授权成功: shop_id=%d, access_token=%s, refresh_token=%s, expire_in=%d秒",
+	log.Printf("✅ Shopee 授权成功并已保存到数据库: shop_id=%d, access_token=%s, refresh_token=%s, expire_in=%d秒",
 		shopID, accessToken, refreshToken, expireIn)
+	log.Printf("   token 过期时间: %s", expireAt.Format(time.RFC3339))
 
-	// 直接返回给前端，方便你复制到 config.yaml
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "Shopee 授权成功，请复制 access_token 到 backend/config.yaml",
-		"data": gin.H{
-			"shop_id":       shopID,
-			"access_token":  accessToken,
-			"refresh_token": refreshToken,
-			"expire_in":     expireIn,
-			"expire_at":     time.Now().Add(time.Duration(expireIn) * time.Second).Format(time.RFC3339),
-		},
-	})
+	// 构建前端回调页面 URL（重定向到前端页面显示成功信息）
+	// 根据请求头判断是开发环境还是生产环境
+	scheme := "https"
+	if c.Request.TLS == nil && c.Request.Header.Get("X-Forwarded-Proto") != "https" {
+		scheme = "http"
+	}
+	host := c.Request.Host
+	
+	// 构建前端回调页面 URL（重定向到前端页面显示成功信息）
+	frontendPath := "/shopee/auth/callback"
+	if strings.Contains(host, "localhost") || strings.Contains(host, "127.0.0.1") || strings.Contains(host, ":") {
+		// 开发环境
+		frontendCallbackURL := fmt.Sprintf("http://%s%s?success=true&shop_id=%d",
+			host, frontendPath, shopID)
+		c.Redirect(http.StatusFound, frontendCallbackURL)
+	} else {
+		// 生产环境，需要加上 /balance/admin 前缀
+		frontendCallbackURL := fmt.Sprintf("%s://%s/balance/admin%s?success=true&shop_id=%d",
+			scheme, host, frontendPath, shopID)
+		c.Redirect(http.StatusFound, frontendCallbackURL)
+	}
 }
 

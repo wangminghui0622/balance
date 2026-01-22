@@ -66,6 +66,7 @@ import { ElMessage } from 'element-plus'
 import { View } from '@element-plus/icons-vue'
 import { authApi } from '@share/api/auth'
 import type { FormInstance, FormRules } from 'element-plus'
+import { STORAGE_KEYS, HTTP_STATUS, getUserType, getRouteByUserType } from '@share/constants'
 
 const router = useRouter()
 const formRef = ref<FormInstance>()
@@ -97,24 +98,21 @@ const handleLogin = async () => {
           password: form.password
         })
 
-        if (res.code === 200 && res.data.token) {
+        if (res.code === HTTP_STATUS.OK && res.data.token) {
           // 保存token和userId
-          localStorage.setItem('token', res.data.token)
-          localStorage.setItem('userId', res.data.userId.toString())
+          localStorage.setItem(STORAGE_KEYS.TOKEN, res.data.token)
+          localStorage.setItem(STORAGE_KEYS.USER_ID, res.data.userId.toString())
 
           ElMessage.success('登录成功')
 
           // 根据用户ID前缀路由到不同页面
           const userId = res.data.userId.toString()
-          if (userId.startsWith('9')) {
-            router.push('/platform')
-          } else if (userId.startsWith('5')) {
-            router.push('/operator')
-          } else if (userId.startsWith('1')) {
-            router.push('/shopowner')
+          const userType = getUserType(userId)
+          if (userType) {
+            router.push(getRouteByUserType(userType))
           } else {
             ElMessage.warning('未知的用户类型')
-            router.push('/platform')
+            router.push(getRouteByUserType(null))
           }
         } else {
           ElMessage.error(res.message || '登录失败')

@@ -16,9 +16,21 @@
         <div class="store-info">
           <div class="store-name">{{ store.name }}</div>
           <div class="store-status">
-            <el-tag size="small" type="success">已授权</el-tag>
+            <el-tag size="small" :type="store.isAuthorized ? 'success' : 'warning'">
+              {{ store.isAuthorized ? '已授权' : '未授权' }}
+            </el-tag>
           </div>
           <div class="store-id">店铺ID: {{ store.storeId }}</div>
+          <div class="store-actions">
+            <el-button
+              type="primary"
+              size="small"
+              :loading="store.authLoading"
+              @click="handleAuth(store)"
+            >
+              {{ store.isAuthorized ? '重新授权' : '授权' }}
+            </el-button>
+          </div>
         </div>
       </div>
     </div>
@@ -27,20 +39,52 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { shopeeApi } from '@share/api/shopee'
 
 interface Store {
   avatar: string
   name: string
   storeId: string
+  shopId: number // Shopee Shop ID
+  isAuthorized: boolean
+  authLoading?: boolean
 }
 
 const storeList = ref<Store[]>([
   {
     avatar: '',
     name: '店铺名称示例文字占位符文字占位符',
-    storeId: '1234567890'
+    storeId: '1234567890',
+    shopId: 226445936, // Shopee Shop ID
+    isAuthorized: false,
+    authLoading: false
   }
 ])
+
+const handleAuth = async (store: Store) => {
+  if (!store.shopId) {
+    ElMessage.warning('店铺 Shop ID 未配置')
+    return
+  }
+
+  store.authLoading = true
+  try {
+    const res = await shopeeApi.getAuthURL(store.shopId)
+    
+    if (res.code === 200 && res.auth_url) {
+      // 在新窗口打开授权链接
+      window.open(res.auth_url, '_blank')
+      ElMessage.success('正在跳转到 Shopee 授权页面...')
+    } else {
+      ElMessage.error(res.message || '获取授权链接失败')
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.message || err?.message || '获取授权链接失败')
+  } finally {
+    store.authLoading = false
+  }
+}
 </script>
 
 <style scoped lang="scss">
@@ -92,6 +136,10 @@ const storeList = ref<Store[]>([
 .store-id {
   font-size: 12px;
   color: #909399;
+}
+
+.store-actions {
+  margin-top: 8px;
 }
 </style>
 

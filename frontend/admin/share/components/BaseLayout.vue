@@ -117,6 +117,7 @@ import { ElMessageBox, ElSwitch } from 'element-plus'
 import { Search, Message, User, ArrowUp, SwitchButton } from '@element-plus/icons-vue'
 import type { MenuItem } from '@share/types'
 import { getApiEnv, setApiEnv } from '@share/config/api'
+import { STORAGE_KEYS, ROUTE_PATH } from '@share/constants'
 
 interface Props {
   menuItems: MenuItem[]
@@ -173,11 +174,11 @@ const handleLogout = async () => {
     })
     
     // 清除本地存储
-    localStorage.removeItem('token')
-    localStorage.removeItem('userId')
+    localStorage.removeItem(STORAGE_KEYS.TOKEN)
+    localStorage.removeItem(STORAGE_KEYS.USER_ID)
     
     // 跳转到登录页
-    router.push('/login')
+    router.push(ROUTE_PATH.LOGIN)
   } catch {
     // 用户取消，不做任何操作
   }

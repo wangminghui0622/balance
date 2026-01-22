@@ -16,8 +16,8 @@
       >
         <el-form-item prop="userType">
           <el-select v-model="form.userType" placeholder="请选择用户类型" style="width: 100%" size="large">
-            <el-option label="店铺" :value="1" />
-            <el-option label="运营" :value="5" />
+            <el-option label="店铺" :value="USER_TYPE_NUM.SHOPOWNER" />
+            <el-option label="运营" :value="USER_TYPE_NUM.OPERATOR" />
           </el-select>
         </el-form-item>
         <el-form-item prop="username">
@@ -102,6 +102,7 @@ import { ElMessage } from 'element-plus'
 import { View } from '@element-plus/icons-vue'
 import { authApi } from '@share/api/auth'
 import type { FormInstance, FormRules } from 'element-plus'
+import { HTTP_STATUS, ROUTE_PATH, USER_TYPE_NUM } from '@share/constants'
 
 const router = useRouter()
 const formRef = ref<FormInstance>()
@@ -110,7 +111,7 @@ const showPassword = ref(false)
 const showConfirmPassword = ref(false)
 
 const form = reactive({
-  userType: 1, // 默认选择店铺
+  userType: USER_TYPE_NUM.SHOPOWNER, // 默认选择店铺
   username: '',
   email: '',
   password: '',
@@ -181,9 +182,9 @@ const handleRegister = async () => {
           userType: form.userType
         })
 
-        if (res.code === 200) {
+        if (res.code === HTTP_STATUS.OK) {
           ElMessage.success('注册成功，请登录')
-          router.push('/login')
+          router.push(ROUTE_PATH.LOGIN)
         } else {
           ElMessage.error(res.message || '注册失败')
         }
@@ -197,7 +198,7 @@ const handleRegister = async () => {
 }
 
 const goToLogin = () => {
-  router.push('/login')
+  router.push(ROUTE_PATH.LOGIN)
 }
 </script>
 
