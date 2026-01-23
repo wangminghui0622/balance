@@ -28,7 +28,7 @@ func SetupRoutes(db *gorm.DB, redisClient *redis.Client, cfg *config.Config) *gi
 	// 优先从数据库读取，如果没有则尝试从配置文件读取（兼容旧配置）
 	var shopeeToken *models.ShopeeToken
 	var useConfigFile bool
-	
+
 	// 尝试从数据库读取
 	if cfg.ShopeeShopID > 0 {
 		token, err := tokenRepo.GetByShopID(cfg.ShopeeShopID)
@@ -37,7 +37,7 @@ func SetupRoutes(db *gorm.DB, redisClient *redis.Client, cfg *config.Config) *gi
 			log.Printf("✅ 已从数据库加载 Shopee 配置 (shop_id=%d)", token.ShopID)
 		}
 	}
-	
+
 	// 如果数据库中没有，尝试从配置文件读取（兼容旧配置）
 	if shopeeToken == nil && cfg.ShopeePartnerID > 0 && cfg.ShopeePartnerKey != "" && cfg.ShopeeShopID > 0 {
 		useConfigFile = true
@@ -59,7 +59,7 @@ func SetupRoutes(db *gorm.DB, redisClient *redis.Client, cfg *config.Config) *gi
 			}
 		}
 	}
-	
+
 	// 初始化 Shopee API 客户端
 	if shopeeToken != nil && shopeeToken.AccessToken != "" {
 		tokenExpireAt := time.Time{}
@@ -87,7 +87,7 @@ func SetupRoutes(db *gorm.DB, redisClient *redis.Client, cfg *config.Config) *gi
 			},
 		)
 		orderService.SetShopeeClient(shopeeClient)
-		
+
 		// 如果是从配置文件读取的，尝试保存到数据库
 		if useConfigFile {
 			err := tokenRepo.CreateOrUpdate(shopeeToken)
@@ -112,7 +112,7 @@ func SetupRoutes(db *gorm.DB, redisClient *redis.Client, cfg *config.Config) *gi
 	// Shopee 授权回调（用于换取 access_token）
 	r.GET("/api/v1/balance/admin/shopee/auth/callback", shopeeAuthController.AuthCallback)
 	// Shopee 授权链接生成（方便前端/浏览器获取授权URL）
-	r.GET("/api/v1/balance/admin/shopee/auth/url", shopeeAuthController.GenerateAuthURL)
+	r.POST("/api/v1/balance/admin/shopee/auth/url", shopeeAuthController.GenerateAuthURL)
 
 	// Shopee 订单状态回调（对外给虾皮配置的回调地址）
 	// 示例： https://你的域名/balance/orderStatusSync/callback

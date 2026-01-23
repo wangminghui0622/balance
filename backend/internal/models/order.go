@@ -6,6 +6,18 @@ import (
 	"time"
 )
 
+//PartnerID := int64(1203446)
+//PartnerKey := "shpk724b6a656d626b696b756345464e6b614d524664716c61525a4e4e4f466c"
+//IsSandbox := true
+//redirect := "https://kx9y.com"
+
+type AuthUrlReq struct {
+	PartnerID  int64  `json:"partnerID"`
+	PartnerKey string `json:"partnerKey"`
+	IsSandbox  bool   `json:"isSandbox"`
+	Redirect   string `json:"redirect"`
+}
+
 // OrderStatusPush 订单状态推送数据结构
 type OrderStatusPush struct {
 	MsgID     string     `json:"msg_id,omitempty"` // 消息ID
@@ -54,7 +66,7 @@ func generateRandomString(length int) string {
 	const charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	b := make([]byte, length)
 	charsetLen := big.NewInt(int64(len(charset)))
-	
+
 	for i := range b {
 		n, err := rand.Int(rand.Reader, charsetLen)
 		if err != nil {

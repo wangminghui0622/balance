@@ -16,7 +16,7 @@
       >
         <el-form-item prop="userType">
           <el-select v-model="form.userType" placeholder="请选择用户类型" style="width: 100%" size="large">
-            <el-option label="店铺" :value="USER_TYPE_NUM.SHOPOWNER" />
+            <el-option label="店主" :value="USER_TYPE_NUM.SHOPOWNER" />
             <el-option label="运营" :value="USER_TYPE_NUM.OPERATOR" />
           </el-select>
         </el-form-item>
