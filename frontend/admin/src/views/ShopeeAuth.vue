@@ -7,22 +7,12 @@
         </div>
       </template>
 
-      <el-form :model="form" label-width="120px">
-        <el-form-item label="Shop ID">
-          <el-input
-            v-model="form.shopId"
-            placeholder="请输入 Shop ID（店铺ID）"
-            clearable
-          />
-          <div class="form-tip">从 Shopee 控制台获取的店铺ID</div>
-        </el-form-item>
-
+      <el-form label-width="120px">
         <el-form-item>
           <el-button
             type="primary"
             :loading="loading"
             @click="handleAuth"
-            :disabled="!form.shopId"
           >
             {{ loading ? '获取授权链接中...' : '开始授权' }}
           </el-button>
@@ -65,8 +55,7 @@
         </div>
       </template>
       <ol>
-        <li>确保已在数据库中配置了 Shopee 基础信息（partner_id, partner_key, shop_id, redirect）</li>
-        <li>输入 Shop ID（店铺ID）</li>
+        <li>固定参数已配置（partnerID, partnerKey, redirect, isSandbox）</li>
         <li>点击"开始授权"按钮获取授权链接</li>
         <li>跳转到 Shopee 授权页面完成授权</li>
         <li>授权成功后，access_token 和 refresh_token 会自动保存到数据库</li>
@@ -76,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { shopeeApi } from '@share/api/shopee'
 
@@ -84,28 +73,13 @@ const loading = ref(false)
 const authURL = ref('')
 const error = ref('')
 
-const form = reactive({
-  shopId: ''
-})
-
 const handleAuth = async () => {
-  if (!form.shopId) {
-    ElMessage.warning('请输入 Shop ID')
-    return
-  }
-
   loading.value = true
   error.value = ''
   authURL.value = ''
 
   try {
-    const shopId = parseInt(form.shopId)
-    if (isNaN(shopId)) {
-      ElMessage.error('Shop ID 必须是数字')
-      return
-    }
-
-    const res = await shopeeApi.getAuthURL(shopId)
+    const res = await shopeeApi.getAuthURL()
     
     if (res.code === 200 && res.auth_url) {
       authURL.value = res.auth_url

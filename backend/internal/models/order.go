@@ -11,13 +11,6 @@ import (
 //IsSandbox := true
 //redirect := "https://kx9y.com"
 
-type AuthUrlReq struct {
-	PartnerID  int64  `json:"partnerID"`
-	PartnerKey string `json:"partnerKey"`
-	IsSandbox  bool   `json:"isSandbox"`
-	Redirect   string `json:"redirect"`
-}
-
 // OrderStatusPush 订单状态推送数据结构
 type OrderStatusPush struct {
 	MsgID     string     `json:"msg_id,omitempty"` // 消息ID

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"balance/admin/services"
 	"balance/internal/config"
 	"balance/internal/models"
 	"balance/internal/utils"
@@ -21,24 +22,22 @@ import (
 
 // ShopeeAuthController 处理虾皮授权回调和换取 access_token
 type ShopeeAuthController struct {
-	cfg *config.Config
-	db  *gorm.DB
+	authService *services.AuthService
+	cfg         *config.Config
+	db          *gorm.DB
 }
 
 // NewShopeeAuthController 创建 Shopee 授权控制器
-func NewShopeeAuthController(cfg *config.Config, db *gorm.DB) *ShopeeAuthController {
-	return &ShopeeAuthController{cfg: cfg, db: db}
+func NewShopeeAuthController(cfg *config.Config, db *gorm.DB, authService *services.AuthService) *ShopeeAuthController {
+	return &ShopeeAuthController{cfg: cfg, db: db, authService: authService}
 }
 
-// getShopeeConfig 从数据库获取 Shopee 配置，如果数据库中没有则从配置文件读取（兼容）
 func (ctrl *ShopeeAuthController) getShopeeConfig(shopID int64) (*models.ShopeeToken, error) {
 	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
 	token, err := tokenRepo.GetByShopID(shopID)
 	if err == nil && token != nil {
 		return token, nil
 	}
-
-	// 数据库中没有，尝试从配置文件读取（兼容旧配置）
 	if ctrl.cfg.ShopeePartnerID > 0 && ctrl.cfg.ShopeePartnerKey != "" {
 		return &models.ShopeeToken{
 			ShopID:     shopID,
@@ -48,11 +47,15 @@ func (ctrl *ShopeeAuthController) getShopeeConfig(shopID int64) (*models.ShopeeT
 			Redirect:   ctrl.cfg.ShopeeRedirect,
 		}, nil
 	}
-
 	return nil, fmt.Errorf("未找到 shop_id=%d 的 Shopee 配置", shopID)
 }
 func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
-	var r models.AuthUrlReq
+	var r struct {
+		PartnerID  int64  `json:"partnerID"`
+		PartnerKey string `json:"partnerKey"`
+		IsSandbox  bool   `json:"isSandbox"`
+		Redirect   string `json:"redirect"`
+	}
 	if err := c.ShouldBindJSON(&r); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    0,
@@ -99,7 +102,6 @@ func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
 	authURL := fmt.Sprintf("%s?partner_id=%d&timestamp=%s&sign=%s&redirect=%s?grantSource=%s",
 		baseAuthURL, r.PartnerID, timestampStr, signature,
 		url.QueryEscape(callbackURL), grantSource)
-	fmt.Println(authURL, "********", callbackURL, "********")
 	c.JSON(http.StatusOK, gin.H{
 		"code":       200,
 		"message":    "生成授权链接成功，在浏览器打开该URL进行授权",
@@ -427,21 +429,13 @@ func (ctrl *ShopeeAuthController) GenerateAuthURL(c *gin.Context) {
 //	})
 //}
 
-// AuthCallback 虾皮授权回调
-// 用于接收 code，并调用 Shopee 接口换取 access_token
-// 示例回调地址： https://kx9y.com/api/v1/balance/admin/shopee/auth/callback
-func (ctrl *ShopeeAuthController) AuthCallback(c *gin.Context) {
+// parseAuthParams 解析授权回调参数
+func (ctrl *ShopeeAuthController) parseAuthParams(c *gin.Context) (int64, string, error) {
 	code := c.Query("code")
 	shopIDStr := c.Query("shop_id")
-	fmt.Println(code, "*****************************AuthCallback**********************************", shopIDStr)
 	if code == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    -1,
-			"message": "缺少参数 code",
-		})
-		return
+		return 0, "", fmt.Errorf("缺少参数 code")
 	}
-
 	var shopID int64
 	if shopIDStr != "" {
 		if id, err := strconv.ParseInt(shopIDStr, 10, 64); err == nil {
@@ -452,99 +446,54 @@ func (ctrl *ShopeeAuthController) AuthCallback(c *gin.Context) {
 		shopID = ctrl.cfg.ShopeeShopID
 	}
 	if shopID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    -1,
-			"message": "请提供 shop_id 参数",
-		})
-		return
+		return 0, "", fmt.Errorf("请提供 shop_id 参数")
 	}
+	return shopID, code, nil
+}
 
-	// 从数据库获取 Shopee 配置
-	shopeeConfig, err := ctrl.getShopeeConfig(shopID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    -1,
-			"message": "未找到 Shopee 配置: " + err.Error(),
-		})
-		return
-	}
-
-	if shopeeConfig.PartnerID == 0 || shopeeConfig.PartnerKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    -1,
-			"message": "Shopee Partner 配置不完整，请先在数据库中配置 partner_id / partner_key",
-		})
-		return
-	}
-
-	// 调用工具函数，向虾皮请求 access_token
+// exchangeShopeeTokens 与虾皮API交换访问令牌
+func (ctrl *ShopeeAuthController) exchangeShopeeTokens(shopID int64, code string, partnerID int64, partnerKey string, isSandbox bool) (string, string, int64, error) {
 	accessToken, refreshToken, expireIn, err := utils.ExchangeShopeeToken(
-		shopeeConfig.PartnerID,
-		shopeeConfig.PartnerKey,
+		partnerID,
+		partnerKey,
 		shopID,
 		code,
-		shopeeConfig.IsSandbox,
+		isSandbox,
 	)
 	if err != nil {
 		log.Printf("向虾皮换取 access_token 失败: %v", err)
-		// 构建前端错误回调页面 URL
-		scheme := "https"
-		if c.Request.TLS == nil && c.Request.Header.Get("X-Forwarded-Proto") != "https" {
-			scheme = "http"
-		}
-		host := c.Request.Host
-		frontendPath := "/shopee/auth/callback"
-		if strings.Contains(host, "localhost") || strings.Contains(host, "127.0.0.1") || strings.Contains(host, ":") {
-			// 开发环境
-			frontendCallbackURL := fmt.Sprintf("http://%s%s?error=%s",
-				host, frontendPath, url.QueryEscape("向虾皮换取 access_token 失败: "+err.Error()))
-			c.Redirect(http.StatusFound, frontendCallbackURL)
-		} else {
-			// 生产环境
-			frontendCallbackURL := fmt.Sprintf("%s://%s/balance/admin%s?error=%s",
-				scheme, host, frontendPath, url.QueryEscape("向虾皮换取 access_token 失败: "+err.Error()))
-			c.Redirect(http.StatusFound, frontendCallbackURL)
-		}
-		return
+		return "", "", 0, err
 	}
+	return accessToken, refreshToken, expireIn, nil
+}
 
-	// 保存 token 到数据库（保留原有的 partner_key 和 redirect 配置）
+// saveTokensToDatabase 保存令牌到数据库
+func (ctrl *ShopeeAuthController) saveTokensToDatabase(shopID int64, partnerID int64, partnerKey string, isSandbox bool, redirect string, accessToken, refreshToken string, expireIn int64) error {
 	expireAt := time.Now().Add(time.Duration(expireIn) * time.Second)
 	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
 	shopeeToken := &models.ShopeeToken{
 		ShopID:        shopID,
-		PartnerID:     shopeeConfig.PartnerID,
-		PartnerKey:    shopeeConfig.PartnerKey, // 保留原有的 partner_key
+		PartnerID:     partnerID,
+		PartnerKey:    partnerKey, // 保留原有的 partner_key
 		AccessToken:   accessToken,
 		RefreshToken:  refreshToken,
 		TokenExpireAt: &expireAt,
-		IsSandbox:     shopeeConfig.IsSandbox,
-		Redirect:      shopeeConfig.Redirect, // 保留原有的 redirect
+		IsSandbox:     isSandbox,
+		Redirect:      redirect, // 保留原有的 redirect
 	}
-
-	err = tokenRepo.CreateOrUpdate(shopeeToken)
+	err := tokenRepo.CreateOrUpdate(shopeeToken)
 	if err != nil {
 		log.Printf("❌ 保存 token 到数据库失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    -1,
-			"message": "授权成功，但保存 token 到数据库失败: " + err.Error(),
-			"data": gin.H{
-				"shop_id":       shopID,
-				"access_token":  accessToken,
-				"refresh_token": refreshToken,
-				"expire_in":     expireIn,
-				"expire_at":     expireAt.Format(time.RFC3339),
-			},
-		})
-		return
+		return err
 	}
-
 	log.Printf("✅ Shopee 授权成功并已保存到数据库: shop_id=%d, access_token=%s, refresh_token=%s, expire_in=%d秒",
 		shopID, accessToken, refreshToken, expireIn)
 	log.Printf("   token 过期时间: %s", expireAt.Format(time.RFC3339))
+	return nil
+}
 
-	// 构建前端回调页面 URL（重定向到前端页面显示成功信息）
-	// 根据请求头判断是开发环境还是生产环境
+// buildFrontendCallbackURL 构建前端回调URL
+func (ctrl *ShopeeAuthController) buildFrontendCallbackURL(c *gin.Context, success bool, shopID int64, errorMessage string) string {
 	scheme := "https"
 	if c.Request.TLS == nil && c.Request.Header.Get("X-Forwarded-Proto") != "https" {
 		scheme = "http"
@@ -555,13 +504,319 @@ func (ctrl *ShopeeAuthController) AuthCallback(c *gin.Context) {
 	frontendPath := "/shopee/auth/callback"
 	if strings.Contains(host, "localhost") || strings.Contains(host, "127.0.0.1") || strings.Contains(host, ":") {
 		// 开发环境
-		frontendCallbackURL := fmt.Sprintf("http://%s%s?success=true&shop_id=%d",
-			host, frontendPath, shopID)
-		c.Redirect(http.StatusFound, frontendCallbackURL)
+		if success {
+			return fmt.Sprintf("http://%s%s?success=true&shop_id=%d",
+				host, frontendPath, shopID)
+		} else {
+			return fmt.Sprintf("http://%s%s?error=%s",
+				host, frontendPath, url.QueryEscape(errorMessage))
+		}
 	} else {
 		// 生产环境，需要加上 /balance/admin 前缀
-		frontendCallbackURL := fmt.Sprintf("%s://%s/balance/admin%s?success=true&shop_id=%d",
-			scheme, host, frontendPath, shopID)
-		c.Redirect(http.StatusFound, frontendCallbackURL)
+		if success {
+			return fmt.Sprintf("%s://%s/balance/admin%s?success=true&shop_id=%d",
+				scheme, host, frontendPath, shopID)
+		} else {
+			return fmt.Sprintf("%s://%s/balance/admin%s?error=%s",
+				scheme, host, frontendPath, url.QueryEscape(errorMessage))
+		}
 	}
 }
+
+// RefreshToken 刷新访问令牌
+func (ctrl *ShopeeAuthController) RefreshToken(c *gin.Context) {
+	var req struct {
+		ShopID int64 `json:"shop_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "参数绑定失败: " + err.Error(),
+		})
+		return
+	}
+	// 从数据库获取 Shopee 配置
+	shopeeConfig, err := ctrl.getShopeeConfig(req.ShopID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "获取 Shopee 配置失败: " + err.Error(),
+		})
+		return
+	}
+
+	if shopeeConfig.RefreshToken == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "没有可用的 refresh_token",
+		})
+		return
+	}
+
+	// 调用工具函数，使用 refresh_token 刷新 access_token
+	accessToken, newRefreshToken, expireIn, err := utils.RefreshShopeeToken(
+		shopeeConfig.PartnerID,
+		shopeeConfig.PartnerKey,
+		req.ShopID,
+		shopeeConfig.RefreshToken,
+		shopeeConfig.IsSandbox,
+	)
+	if err != nil {
+		log.Printf("刷新 access_token 失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "刷新 access_token 失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 更新数据库中的令牌信息
+	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
+	expireAt := time.Now().Add(time.Duration(expireIn) * time.Second)
+	err = tokenRepo.UpdateTokens(req.ShopID, accessToken, newRefreshToken, &expireAt, nil)
+	if err != nil {
+		log.Printf("❌ 保存刷新后的 token 到数据库失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "刷新成功，但保存 token 到数据库失败: " + err.Error(),
+		})
+		return
+	}
+
+	log.Printf("✅ Shopee access_token 刷新成功: shop_id=%d, access_token=%s, refresh_token=%s, expire_in=%d秒",
+		req.ShopID, accessToken, newRefreshToken, expireIn)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "刷新成功",
+		"data": gin.H{
+			"shop_id":       req.ShopID,
+			"access_token":  accessToken,
+			"refresh_token": newRefreshToken,
+			"expire_in":     expireIn,
+			"expire_at":     expireAt.Format(time.RFC3339),
+		},
+	})
+}
+
+// AutoRefreshTokens 自动刷新即将过期的tokens
+func (ctrl *ShopeeAuthController) AutoRefreshTokens() {
+	log.Printf("启动自动刷新 Shopee tokens 任务...")
+	
+	// 获取所有有refresh_token的记录
+	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
+	allTokens, err := tokenRepo.GetAllWithRefreshToken()
+	if err != nil {
+		log.Printf("获取所有 Shopee tokens 失败: %v", err)
+		return
+	}
+	
+	for _, token := range allTokens {
+		// 检查是否需要刷新（提前1小时刷新）
+		if token.TokenExpireAt != nil {
+			refreshTime := token.TokenExpireAt.Add(-1 * time.Hour)
+			if time.Now().After(refreshTime) {
+				log.Printf("发现即将过期的 token (shop_id=%d)，开始自动刷新...", token.ShopID)
+				
+				// 调用刷新函数
+				accessToken, newRefreshToken, expireIn, err := utils.RefreshShopeeToken(
+					token.PartnerID,
+					token.PartnerKey,
+					token.ShopID,
+					token.RefreshToken,
+					token.IsSandbox,
+				)
+				if err != nil {
+					log.Printf("自动刷新 token 失败 (shop_id=%d): %v", token.ShopID, err)
+					continue
+				}
+
+				// 更新数据库
+				expireAt := time.Now().Add(time.Duration(expireIn) * time.Second)
+				err = tokenRepo.UpdateTokens(token.ShopID, accessToken, newRefreshToken, &expireAt, nil)
+				if err != nil {
+					log.Printf("保存刷新后的 token 到数据库失败 (shop_id=%d): %v", token.ShopID, err)
+					continue
+				}
+
+				log.Printf("✅ 自动刷新 Shopee token 成功 (shop_id=%d): 新 token 有效期至 %s", 
+					token.ShopID, expireAt.Format(time.RFC3339))
+			}
+		}
+	}
+}
+
+// AuthCallback 虾皮授权回调
+// 用于接收 code，并调用 Shopee 接口换取 access_token
+// 示例回调地址： https://kx9y.com/api/v1/balance/admin/shopee/auth/callback
+func (ctrl *ShopeeAuthController) AuthCallback(c *gin.Context) {
+	// 解析参数
+	shopID, code, err := ctrl.parseAuthParams(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": err.Error(),
+		})
+		return
+	}
+	authCfg, err := ctrl.authService.GetByPartnerId()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": err.Error(),
+		})
+		return
+	}
+	accessToken, refreshToken, expireIn, err := ctrl.exchangeShopeeTokens(shopID, code, authCfg.PartnerID, authCfg.PartnerKey, authCfg.IsSandbox)
+	if err != nil {
+		// 构建前端错误回调页面 URL
+		errorMsg := "向虾皮换取 access_token 失败: " + err.Error()
+		frontendCallbackURL := ctrl.buildFrontendCallbackURL(c, false, shopID, errorMsg)
+		c.Redirect(http.StatusFound, frontendCallbackURL)
+		return
+	}
+
+	// 保存 token 到数据库
+	err = ctrl.saveTokensToDatabase(shopID, authCfg.PartnerID, authCfg.PartnerKey, authCfg.IsSandbox,
+		authCfg.Redirect, accessToken, refreshToken, expireIn)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "授权成功，但保存 token 到数据库失败: " + err.Error(),
+			"data": gin.H{
+				"shop_id":       shopID,
+				"access_token":  accessToken,
+				"refresh_token": refreshToken,
+				"expire_in":     expireIn,
+				"expire_at":     time.Now().Add(time.Duration(expireIn) * time.Second).Format(time.RFC3339),
+			},
+		})
+		return
+	}
+
+	// 构建前端成功回调页面 URL 并重定向
+	frontendCallbackURL := ctrl.buildFrontendCallbackURL(c, true, shopID, "")
+	c.Redirect(http.StatusFound, frontendCallbackURL)
+}
+
+//func (ctrl *ShopeeAuthController) AuthCallback(c *gin.Context) {
+//	code := c.Query("code")
+//	shopIDStr := c.Query("shop_id")
+//	if code == "" {
+//		c.JSON(http.StatusBadRequest, gin.H{
+//			"code":    -1,
+//			"message": "缺少参数 code",
+//		})
+//		return
+//	}
+//	var shopID int64
+//	if shopIDStr != "" {
+//		if id, err := strconv.ParseInt(shopIDStr, 10, 64); err == nil {
+//			shopID = id
+//		}
+//	}
+//	if shopID == 0 {
+//		shopID = ctrl.cfg.ShopeeShopID
+//	}
+//	if shopID == 0 {
+//		c.JSON(http.StatusBadRequest, gin.H{
+//			"code":    -1,
+//			"message": "请提供 shop_id 参数",
+//		})
+//		return
+//	}
+//	// 从数据库获取 Shopee 配置
+//	shopeeConfig, err := ctrl.getShopeeConfig(shopID)
+//	if err != nil {
+//		if err != gorm.ErrRecordNotFound {
+//			return
+//		}
+//	}
+//	// 调用工具函数，向虾皮请求 access_token
+//	accessToken, refreshToken, expireIn, err := utils.ExchangeShopeeToken(
+//		shopeeConfig.PartnerID,
+//		shopeeConfig.PartnerKey,
+//		shopID,
+//		code,
+//		shopeeConfig.IsSandbox,
+//	)
+//	if err != nil {
+//		log.Printf("向虾皮换取 access_token 失败: %v", err)
+//		// 构建前端错误回调页面 URL
+//		scheme := "https"
+//		if c.Request.TLS == nil && c.Request.Header.Get("X-Forwarded-Proto") != "https" {
+//			scheme = "http"
+//		}
+//		host := c.Request.Host
+//		frontendPath := "/shopee/auth/callback"
+//		if strings.Contains(host, "localhost") || strings.Contains(host, "127.0.0.1") || strings.Contains(host, ":") {
+//			// 开发环境
+//			frontendCallbackURL := fmt.Sprintf("http://%s%s?error=%s",
+//				host, frontendPath, url.QueryEscape("向虾皮换取 access_token 失败: "+err.Error()))
+//			c.Redirect(http.StatusFound, frontendCallbackURL)
+//		} else {
+//			// 生产环境
+//			frontendCallbackURL := fmt.Sprintf("%s://%s/balance/admin%s?error=%s",
+//				scheme, host, frontendPath, url.QueryEscape("向虾皮换取 access_token 失败: "+err.Error()))
+//			c.Redirect(http.StatusFound, frontendCallbackURL)
+//		}
+//		return
+//	}
+//
+//	// 保存 token 到数据库（保留原有的 partner_key 和 redirect 配置）
+//	expireAt := time.Now().Add(time.Duration(expireIn) * time.Second)
+//	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
+//	shopeeToken := &models.ShopeeToken{
+//		ShopID:        shopID,
+//		PartnerID:     shopeeConfig.PartnerID,
+//		PartnerKey:    shopeeConfig.PartnerKey, // 保留原有的 partner_key
+//		AccessToken:   accessToken,
+//		RefreshToken:  refreshToken,
+//		TokenExpireAt: &expireAt,
+//		IsSandbox:     shopeeConfig.IsSandbox,
+//		Redirect:      shopeeConfig.Redirect, // 保留原有的 redirect
+//	}
+//
+//	err = tokenRepo.CreateOrUpdate(shopeeToken)
+//	if err != nil {
+//		log.Printf("❌ 保存 token 到数据库失败: %v", err)
+//		c.JSON(http.StatusInternalServerError, gin.H{
+//			"code":    -1,
+//			"message": "授权成功，但保存 token 到数据库失败: " + err.Error(),
+//			"data": gin.H{
+//				"shop_id":       shopID,
+//				"access_token":  accessToken,
+//				"refresh_token": refreshToken,
+//				"expire_in":     expireIn,
+//				"expire_at":     expireAt.Format(time.RFC3339),
+//			},
+//		})
+//		return
+//	}
+//
+//	log.Printf("✅ Shopee 授权成功并已保存到数据库: shop_id=%d, access_token=%s, refresh_token=%s, expire_in=%d秒",
+//		shopID, accessToken, refreshToken, expireIn)
+//	log.Printf("   token 过期时间: %s", expireAt.Format(time.RFC3339))
+//
+//	// 构建前端回调页面 URL（重定向到前端页面显示成功信息）
+//	// 根据请求头判断是开发环境还是生产环境
+//	scheme := "https"
+//	if c.Request.TLS == nil && c.Request.Header.Get("X-Forwarded-Proto") != "https" {
+//		scheme = "http"
+//	}
+//	host := c.Request.Host
+//
+//	// 构建前端回调页面 URL（重定向到前端页面显示成功信息）
+//	frontendPath := "/shopee/auth/callback"
+//	if strings.Contains(host, "localhost") || strings.Contains(host, "127.0.0.1") || strings.Contains(host, ":") {
+//		// 开发环境
+//		frontendCallbackURL := fmt.Sprintf("http://%s%s?success=true&shop_id=%d",
+//			host, frontendPath, shopID)
+//		c.Redirect(http.StatusFound, frontendCallbackURL)
+//	} else {
+//		// 生产环境，需要加上 /balance/admin 前缀
+//		frontendCallbackURL := fmt.Sprintf("%s://%s/balance/admin%s?success=true&shop_id=%d",
+//			scheme, host, frontendPath, shopID)
+//		c.Redirect(http.StatusFound, frontendCallbackURL)
+//	}
+//}

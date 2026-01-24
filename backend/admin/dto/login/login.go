@@ -1,4 +1,4 @@
-package dto
+package login
 
 import "balance/internal/constants"
 
@@ -32,8 +32,8 @@ func (r *RegisterRequest) GetUserTypeName() string {
 
 // LoginResponse 登录响应
 type LoginResponse struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int       `json:"code"`
+	Message string    `json:"message"`
 	Data    LoginData `json:"data"`
 }
 

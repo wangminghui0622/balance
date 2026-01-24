@@ -113,3 +113,13 @@ func (r *ShopeeTokenRepository) UpdateTokens(shopID int64, accessToken, refreshT
 func (r *ShopeeTokenRepository) Delete(shopID int64) error {
 	return r.db.Where("shop_id = ?", shopID).Delete(&ShopeeToken{}).Error
 }
+
+// GetAllWithRefreshToken 获取所有包含 refresh_token 的记录
+func (r *ShopeeTokenRepository) GetAllWithRefreshToken() ([]*ShopeeToken, error) {
+	var tokens []*ShopeeToken
+	err := r.db.Where("refresh_token != '' AND refresh_token IS NOT NULL").Find(&tokens).Error
+	if err != nil {
+		return nil, err
+	}
+	return tokens, nil
+}

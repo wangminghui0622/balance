@@ -11,7 +11,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -53,36 +52,40 @@ func NewShopeeAPIClientWithRefresh(partnerID int64, partnerKey string, shopID in
 }
 
 // generateSignature 生成API签名
-// 虾皮API签名规则: partner_id + path + timestamp + access_token + shop_id + 其他参数（按key排序）
+// 根据Java项目参考实现，虾皮API签名规则:
+// base_string = partner_id + path + timestamp + access_token + shop_id (当有access_token时)
+// base_string = partner_id + path + timestamp (当没有access_token时)
+// 然后使用HMAC-SHA256计算签名
 func (c *ShopeeAPIClient) generateSignature(path string, params map[string]string) string {
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-	
-	// 排除sign参数，按key排序
-	keys := make([]string, 0, len(params))
-	for k := range params {
-		if k != "sign" {
-			keys = append(keys, k)
-		}
+	// 从params中获取timestamp，如果不存在则使用当前时间
+	timestamp, exists := params["timestamp"]
+	if !exists {
+		timestamp = strconv.FormatInt(time.Now().Unix(), 10)
 	}
-	sort.Strings(keys)
 	
-	// 构建签名字符串: partner_id + path + timestamp + access_token + shop_id + 其他参数（按key排序）
-	signString := fmt.Sprintf("%d%s%s%s%d",
-		c.PartnerID,
-		path,
-		timestamp,
-		c.AccessToken,
-		c.ShopID,
-	)
-	
-	// 添加其他参数（按key排序）
-	for _, k := range keys {
-		signString += k + "=" + params[k]
+	// 构建基础签名字符串
+	var baseString string
+	if c.AccessToken != "" {
+		// 有access_token的API: partner_id + path + timestamp + access_token + shop_id
+		baseString = fmt.Sprintf("%d%s%s%s%d",
+			c.PartnerID,
+			path,
+			timestamp,
+			c.AccessToken,
+			c.ShopID,
+		)
+	} else {
+		// 没有access_token的API: partner_id + path + timestamp
+		baseString = fmt.Sprintf("%d%s%s",
+			c.PartnerID,
+			path,
+			timestamp,
+		)
 	}
 	
 	// HMAC-SHA256签名
 	mac := hmac.New(sha256.New, []byte(c.PartnerKey))
-	mac.Write([]byte(signString))
+	mac.Write([]byte(baseString))
 	signature := hex.EncodeToString(mac.Sum(nil))
 	
 	return signature
@@ -103,12 +106,11 @@ func (c *ShopeeAPIClient) GetOrderList(timeRangeField string, timeFrom, timeTo i
 	path := "/api/v2/order/get_order_list"
 	timestamp := time.Now().Unix()
 	
-	// 构建参数
+	// 构建参数 (without sign and timestamp yet)
 	params := map[string]string{
 		"partner_id":      strconv.FormatInt(c.PartnerID, 10),
 		"shop_id":         strconv.FormatInt(c.ShopID, 10),
 		"access_token":    c.AccessToken,
-		"timestamp":       strconv.FormatInt(timestamp, 10),
 		"time_range_field": timeRangeField,
 		"time_from":       strconv.FormatInt(timeFrom, 10),
 		"time_to":         strconv.FormatInt(timeTo, 10),
@@ -118,6 +120,9 @@ func (c *ShopeeAPIClient) GetOrderList(timeRangeField string, timeFrom, timeTo i
 	if cursor != "" {
 		params["cursor"] = cursor
 	}
+	
+	// Add timestamp to params for signature generation
+	params["timestamp"] = strconv.FormatInt(timestamp, 10)
 	
 	// 生成签名
 	signature := c.generateSignature(path, params)
@@ -466,14 +471,16 @@ func (c *ShopeeAPIClient) GetOrderDetail(orderSnList []string) (map[string]inter
 	path := "/api/v2/order/get_order_detail"
 	timestamp := time.Now().Unix()
 	
-	// 构建参数
+	// 构建参数 (without sign and timestamp yet)
 	params := map[string]string{
 		"partner_id":   strconv.FormatInt(c.PartnerID, 10),
 		"shop_id":      strconv.FormatInt(c.ShopID, 10),
 		"access_token": c.AccessToken,
-		"timestamp":    strconv.FormatInt(timestamp, 10),
 		"order_sn_list": strings.Join(orderSnList, ","),
 	}
+	
+	// Add timestamp to params for signature generation
+	params["timestamp"] = strconv.FormatInt(timestamp, 10)
 	
 	// 生成签名
 	signature := c.generateSignature(path, params)
@@ -508,6 +515,63 @@ func (c *ShopeeAPIClient) GetOrderDetail(orderSnList []string) (map[string]inter
 	}
 	
 	log.Printf("虾皮API订单详情响应: %+v", result)
+	
+	return result, nil
+}
+
+// GetShopInfo 获取店铺信息
+func (c *ShopeeAPIClient) GetShopInfo() (map[string]interface{}, error) {
+	// 确保 token 有效
+	if err := c.ensureValidToken(); err != nil {
+		return nil, err
+	}
+
+	path := "/api/v2/shop/get_shop_info"
+	timestamp := time.Now().Unix()
+	
+	// 构建参数 (without sign and timestamp yet)
+	params := map[string]string{
+		"partner_id":   strconv.FormatInt(c.PartnerID, 10),
+		"shop_id":      strconv.FormatInt(c.ShopID, 10),
+		"access_token": c.AccessToken,
+	}
+	
+	// Add timestamp to params for signature generation
+	params["timestamp"] = strconv.FormatInt(timestamp, 10)
+	
+	// 生成签名
+	signature := c.generateSignature(path, params)
+	params["sign"] = signature
+	
+	// 构建URL
+	queryValues := url.Values{}
+	for k, v := range params {
+		queryValues.Set(k, v)
+	}
+	requestURL := fmt.Sprintf("%s%s?%s", c.BaseURL, path, queryValues.Encode())
+	
+	log.Printf("调用虾皮API获取店铺信息: %s", requestURL)
+	
+	// 发送GET请求
+	resp, err := http.Get(requestURL)
+	if err != nil {
+		return nil, fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %v", err)
+	}
+	
+	// 解析JSON响应
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("解析JSON失败: %v, 响应: %s", err, string(body))
+	}
+	
+	log.Printf("虾皮API店铺信息响应: %+v", result)
 	
 	return result, nil
 }
