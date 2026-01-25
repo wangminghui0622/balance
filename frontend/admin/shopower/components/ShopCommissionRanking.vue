@@ -62,6 +62,8 @@ const getRankClass = (index: number) => {
 <style scoped lang="scss">
 .ranking-card {
   height: 100%;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .card-header {
@@ -130,6 +132,10 @@ const getRankClass = (index: number) => {
   font-weight: 500;
   color: #303133;
   line-height: 1.4;
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .commission {

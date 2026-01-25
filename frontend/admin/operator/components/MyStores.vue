@@ -16,7 +16,7 @@
         <div class="store-info">
           <div class="store-name">{{ store.name }}</div>
           <div class="store-status">
-            <el-tag size="small" type="success">已授权</el-tag>
+            <el-tag size="small" type="success">已授权111</el-tag>
           </div>
           <div class="store-id">店铺ID: {{ store.storeId }}</div>
         </div>

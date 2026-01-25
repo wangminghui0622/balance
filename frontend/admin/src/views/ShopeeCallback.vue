@@ -26,7 +26,7 @@
             </div>
           </template>
           <template #extra>
-            <el-button type="primary" @click="goToHome">返回首页</el-button>
+            <el-button type="primary" @click="goToHome" @mouseover="logButtonHover">返回首页</el-button>
           </template>
         </el-result>
       </div>
@@ -38,7 +38,7 @@
           </template>
           <template #extra>
             <el-button type="primary" @click="goToAuth">重新授权</el-button>
-            <el-button @click="goToHome">返回首页</el-button>
+            <el-button @click="goToHome" @mouseover="logButtonHover">返回首页</el-button>
           </template>
         </el-result>
       </div>
@@ -51,6 +51,10 @@ import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
+import request from '../../share/utils/request'
+import { STORAGE_KEYS } from '../../share/constants'
+
+console.log('ShopeeCallback 组件开始加载');
 
 const router = useRouter()
 const route = useRoute()
@@ -67,13 +71,16 @@ const resultData = ref<{
 } | null>(null)
 
 onMounted(async () => {
+  console.log('onMounted 执行，路由参数:', route.query);
   const successParam = route.query.success as string
   const shopId = route.query.shop_id as string
   const errorParam = route.query.error as string
 
   loading.value = false
+  console.log('loading 设置为 false');
 
   if (successParam === 'true' && shopId) {
+    console.log('授权成功，设置 success 为 true');
     // 授权成功（后端重定向过来的）
     success.value = true
     resultData.value = {
@@ -84,21 +91,92 @@ onMounted(async () => {
       expire_at: '请查看数据库或后端日志'
     }
     ElMessage.success('授权成功，Token 已保存到数据库')
+    
+    // 自动触发绑定操作
+    await autoBindShop();
   } else {
+    console.log('授权失败或参数错误，设置 error:', errorParam);
     // 授权失败或参数错误
     error.value = errorParam || '授权失败或参数错误'
     if (error.value) {
       ElMessage.error(error.value)
     }
   }
+  console.log('onMounted 执行完成，当前状态 - success:', success.value, 'error:', error.value);
 })
 
 const goToAuth = () => {
+  console.log('goToAuth 被调用');
   router.push('/shopee/auth')
 }
 
-const goToHome = () => {
-  router.push('/')
+const logButtonHover = () => {
+  console.log('鼠标悬停在返回首页按钮上');
+}
+
+// 自动绑定店铺
+const autoBindShop = async () => {
+  console.log('autoBindShop 函数开始执行');
+  // 获取当前用户的token
+  const token = localStorage.getItem(STORAGE_KEYS.TOKEN) || sessionStorage.getItem(STORAGE_KEYS.TOKEN);
+  console.log('token:**************', token);
+  console.log('当前 resultData:', resultData.value);
+  console.log('当前 route.query:', route.query);
+  
+  if (token) {
+    console.log('检测到token，准备调用后端bind接口');
+    try {
+      // 调用后端的bind接口，将token和shop_id发送到服务器
+      console.log('发送请求到后端: /api/v1/balance/admin/shopee/auth/bind');
+      const response = await request.post('/api/v1/balance/admin/shopee/auth/bind', {
+        token: token,
+        shop_id: resultData.value?.shop_id || parseInt(route.query.shop_id as string || '0')
+      });
+      console.log('后端响应:', response);
+      
+      // 由于request拦截器返回response.data，我们需要断言类型
+      const responseData: any = response;
+      
+      // 检查响应状态码
+      if (responseData.code === 200) {
+        console.log('自动绑定成功:', responseData);
+        ElMessage.success('店铺绑定成功！');
+        
+        // 绑定成功后跳转到首页
+        console.log('跳转到首页');
+        setTimeout(() => {
+          router.push('/');
+        }, 1500); // 稍微延迟一下，让用户看到成功消息
+      } else {
+        console.error('自动绑定失败，响应代码:', responseData.code);
+        ElMessage.error('店铺绑定失败，请稍后重试');
+        // 即使绑定失败也跳转到首页
+        setTimeout(() => {
+          router.push('/');
+        }, 1500);
+      }
+    } catch (bindError) {
+      console.error('自动绑定失败:', bindError);
+      ElMessage.error('店铺绑定请求失败，请稍后重试');
+      // 即使绑定失败也跳转到首页
+      setTimeout(() => {
+        router.push('/');
+      }, 1500);
+    }
+  } else {
+    console.warn('未找到用户token，无法自动绑定');
+    // 如果没有token，则直接跳转到首页
+    console.log('无token，直接跳转到首页');
+    setTimeout(() => {
+      router.push('/');
+    }, 1500);
+  }
+}
+
+const goToHome = async () => {
+  console.log('goToHome 函数开始执行（通过按钮点击）');
+  // 调用相同的绑定逻辑
+  await autoBindShop();
 }
 </script>
 

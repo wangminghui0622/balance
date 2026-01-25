@@ -19,7 +19,7 @@ type OrderService struct {
 }
 
 // NewOrderService 创建订单服务
-func NewOrderService(merchantURL string, db *gorm.DB) *OrderService {
+func NewOrderService(db *gorm.DB) *OrderService {
 	// merchantURL 参数保留以兼容现有代码，但不再使用
 	return &OrderService{db: db}
 }
@@ -180,10 +180,10 @@ func (s *OrderService) FetchOrdersFromShopee(timeRangeField string, timeFrom, ti
 	if err != nil || len(tokens) == 0 {
 		return nil, errors.New("没有找到有效的店铺配置")
 	}
-	
+
 	// Use the first available shop configuration
 	shopeeToken := tokens[0]
-	
+
 	log.Printf("开始拉取虾皮订单: shop_id=%d, timeRangeField=%s, timeFrom=%d, timeTo=%d, pageSize=%d, cursor=%s",
 		shopeeToken.ShopID, timeRangeField, timeFrom, timeTo, pageSize, cursor)
 
@@ -192,7 +192,7 @@ func (s *OrderService) FetchOrdersFromShopee(timeRangeField string, timeFrom, ti
 	if shopeeToken.TokenExpireAt != nil {
 		tokenExpireAt = *shopeeToken.TokenExpireAt
 	}
-	
+
 	shopeeClient := shareUtils.NewShopeeAPIClientWithRefresh(
 		shopeeToken.PartnerID,
 		shopeeToken.PartnerKey,
@@ -318,7 +318,7 @@ func (s *OrderService) FetchOrderDetailFromShopee(orderSnList []string) (map[str
 	if err != nil || len(tokens) == 0 {
 		return nil, errors.New("没有找到有效的店铺配置")
 	}
-	
+
 	// Use the first available shop configuration
 	shopeeToken := tokens[0]
 
@@ -333,7 +333,7 @@ func (s *OrderService) FetchOrderDetailFromShopee(orderSnList []string) (map[str
 	if shopeeToken.TokenExpireAt != nil {
 		tokenExpireAt = *shopeeToken.TokenExpireAt
 	}
-	
+
 	shopeeClient := shareUtils.NewShopeeAPIClientWithRefresh(
 		shopeeToken.PartnerID,
 		shopeeToken.PartnerKey,
@@ -465,7 +465,7 @@ func (s *OrderService) FetchShopDetailFromShopee(shopID int64) (map[string]inter
 	)
 
 	// Call the client's GetShopInfo method
-	result, err := shopeeClient.GetShopInfo()
+	basicInfo, err := shopeeClient.GetShopInfo()
 	if err != nil {
 		// Check if error is related to token expiration
 		errMsg := err.Error()
@@ -502,7 +502,7 @@ func (s *OrderService) FetchShopDetailFromShopee(shopID int64) (map[string]inter
 
 			// Retry the API call
 			log.Printf("刷新token成功，重新尝试拉取店铺详情...")
-			result, err = shopeeClient.GetShopInfo()
+			basicInfo, err = shopeeClient.GetShopInfo()
 			if err != nil {
 				log.Printf("重试拉取店铺详情仍失败: %v", err)
 				return nil, err
@@ -511,6 +511,40 @@ func (s *OrderService) FetchShopDetailFromShopee(shopID int64) (map[string]inter
 			log.Printf("拉取虾皮店铺详情失败: %v", err)
 			return nil, err
 		}
+	}
+
+	// Get additional detailed shop profile information
+	profileInfo, err := shopeeClient.GetShopProfileInfo()
+	if err != nil {
+		log.Printf("获取店铺详细信息失败 (可选): %v", err)
+		// Don't fail the whole operation if profile info fails
+		profileInfo = nil
+	}
+
+	// Get shop performance information
+	performanceInfo, err := shopeeClient.GetShopPerformance()
+	if err != nil {
+		log.Printf("获取店铺表现评分失败 (可选): %v", err)
+		// Don't fail the whole operation if performance info fails
+		performanceInfo = nil
+	}
+
+	// Combine all information into a comprehensive result
+	result := make(map[string]interface{})
+
+	// Add basic shop info
+	for k, v := range basicInfo {
+		result[k] = v
+	}
+
+	// Add detailed profile info if available
+	if profileInfo != nil {
+		result["profile"] = profileInfo
+	}
+
+	// Add performance info if available
+	if performanceInfo != nil {
+		result["performance"] = performanceInfo
 	}
 
 	return result, nil

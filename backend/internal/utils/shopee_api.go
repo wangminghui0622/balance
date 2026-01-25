@@ -575,3 +575,117 @@ func (c *ShopeeAPIClient) GetShopInfo() (map[string]interface{}, error) {
 	
 	return result, nil
 }
+
+// GetShopProfileInfo 获取店铺详细信息（包括Logo、描述、店铺名称、发票开具方信息等）
+func (c *ShopeeAPIClient) GetShopProfileInfo() (map[string]interface{}, error) {
+	// 确保 token 有效
+	if err := c.ensureValidToken(); err != nil {
+		return nil, err
+	}
+
+	path := "/api/v2/shop/get_profile"
+	timestamp := time.Now().Unix()
+	
+	// 构建参数 (without sign and timestamp yet)
+	params := map[string]string{
+		"partner_id":   strconv.FormatInt(c.PartnerID, 10),
+		"shop_id":      strconv.FormatInt(c.ShopID, 10),
+		"access_token": c.AccessToken,
+	}
+	
+	// Add timestamp to params for signature generation
+	params["timestamp"] = strconv.FormatInt(timestamp, 10)
+	
+	// 生成签名
+	signature := c.generateSignature(path, params)
+	params["sign"] = signature
+	
+	// 构建URL
+	queryValues := url.Values{}
+	for k, v := range params {
+		queryValues.Set(k, v)
+	}
+	requestURL := fmt.Sprintf("%s%s?%s", c.BaseURL, path, queryValues.Encode())
+	
+	log.Printf("调用虾皮API获取店铺详细信息: %s", requestURL)
+	
+	// 发送GET请求
+	resp, err := http.Get(requestURL)
+	if err != nil {
+		return nil, fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %v", err)
+	}
+	
+	// 解析JSON响应
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("解析JSON失败: %v, 响应: %s", err, string(body))
+	}
+	
+	log.Printf("虾皮API店铺详细信息响应: %+v", result)
+	
+	return result, nil
+}
+
+// GetShopPerformance 获取店铺表现评分
+func (c *ShopeeAPIClient) GetShopPerformance() (map[string]interface{}, error) {
+	// 确保 token 有效
+	if err := c.ensureValidToken(); err != nil {
+		return nil, err
+	}
+
+	path := "/api/v2/account_health/get_shop_performance"
+	timestamp := time.Now().Unix()
+	
+	// 构建参数 (without sign and timestamp yet)
+	params := map[string]string{
+		"partner_id":   strconv.FormatInt(c.PartnerID, 10),
+		"shop_id":      strconv.FormatInt(c.ShopID, 10),
+		"access_token": c.AccessToken,
+	}
+	
+	// Add timestamp to params for signature generation
+	params["timestamp"] = strconv.FormatInt(timestamp, 10)
+	
+	// 生成签名
+	signature := c.generateSignature(path, params)
+	params["sign"] = signature
+	
+	// 构建URL
+	queryValues := url.Values{}
+	for k, v := range params {
+		queryValues.Set(k, v)
+	}
+	requestURL := fmt.Sprintf("%s%s?%s", c.BaseURL, path, queryValues.Encode())
+	
+	log.Printf("调用虾皮API获取店铺表现评分: %s", requestURL)
+	
+	// 发送GET请求
+	resp, err := http.Get(requestURL)
+	if err != nil {
+		return nil, fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %v", err)
+	}
+	
+	// 解析JSON响应
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("解析JSON失败: %v, 响应: %s", err, string(body))
+	}
+	
+	log.Printf("虾皮API店铺表现评分响应: %+v", result)
+	
+	return result, nil
+}

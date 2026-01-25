@@ -61,7 +61,6 @@ func (ctrl *LoginController) Register(c *gin.Context) {
 		})
 		return
 	}
-
 	_, err := ctrl.loginService.Register(c.Request.Context(), req.Username, req.Password, req.Email, req.UserType)
 	if err != nil {
 		code := constants.HTTPStatusBadRequest
@@ -74,7 +73,6 @@ func (ctrl *LoginController) Register(c *gin.Context) {
 		})
 		return
 	}
-
 	c.JSON(http.StatusOK, login.RegisterResponse{
 		Code:    constants.ResponseCodeSuccess,
 		Message: "注册成功",

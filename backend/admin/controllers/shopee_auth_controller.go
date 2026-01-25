@@ -7,6 +7,7 @@ import (
 	"balance/internal/utils"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
@@ -22,14 +23,15 @@ import (
 
 // ShopeeAuthController 处理虾皮授权回调和换取 access_token
 type ShopeeAuthController struct {
-	authService *services.AuthService
-	cfg         *config.Config
-	db          *gorm.DB
+	orderService *services.OrderService
+	authService  *services.AuthService
+	cfg          *config.Config
+	db           *gorm.DB
 }
 
 // NewShopeeAuthController 创建 Shopee 授权控制器
-func NewShopeeAuthController(cfg *config.Config, db *gorm.DB, authService *services.AuthService) *ShopeeAuthController {
-	return &ShopeeAuthController{cfg: cfg, db: db, authService: authService}
+func NewShopeeAuthController(cfg *config.Config, db *gorm.DB, authService *services.AuthService, orderService *services.OrderService) *ShopeeAuthController {
+	return &ShopeeAuthController{cfg: cfg, db: db, authService: authService, orderService: orderService}
 }
 
 func (ctrl *ShopeeAuthController) getShopeeConfig(shopID int64) (*models.ShopeeToken, error) {
@@ -602,7 +604,7 @@ func (ctrl *ShopeeAuthController) RefreshToken(c *gin.Context) {
 // AutoRefreshTokens 自动刷新即将过期的tokens
 func (ctrl *ShopeeAuthController) AutoRefreshTokens() {
 	log.Printf("启动自动刷新 Shopee tokens 任务...")
-	
+
 	// 获取所有有refresh_token的记录
 	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
 	allTokens, err := tokenRepo.GetAllWithRefreshToken()
@@ -610,14 +612,14 @@ func (ctrl *ShopeeAuthController) AutoRefreshTokens() {
 		log.Printf("获取所有 Shopee tokens 失败: %v", err)
 		return
 	}
-	
+
 	for _, token := range allTokens {
 		// 检查是否需要刷新（提前1小时刷新）
 		if token.TokenExpireAt != nil {
 			refreshTime := token.TokenExpireAt.Add(-1 * time.Hour)
 			if time.Now().After(refreshTime) {
 				log.Printf("发现即将过期的 token (shop_id=%d)，开始自动刷新...", token.ShopID)
-				
+
 				// 调用刷新函数
 				accessToken, newRefreshToken, expireIn, err := utils.RefreshShopeeToken(
 					token.PartnerID,
@@ -639,11 +641,58 @@ func (ctrl *ShopeeAuthController) AutoRefreshTokens() {
 					continue
 				}
 
-				log.Printf("✅ 自动刷新 Shopee token 成功 (shop_id=%d): 新 token 有效期至 %s", 
+				log.Printf("✅ 自动刷新 Shopee token 成功 (shop_id=%d): 新 token 有效期至 %s",
 					token.ShopID, expireAt.Format(time.RFC3339))
 			}
 		}
 	}
+}
+
+func (ctrl *ShopeeAuthController) AuthBind(c *gin.Context) {
+	log.Println("======= 收到 AuthBind 请求 =======")
+	
+	var req struct {
+		Token  string `json:"token" form:"token" binding:"required"`
+		ShopID int64  `json:"shop_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("参数绑定失败: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "参数绑定失败: " + err.Error(),
+		})
+		return
+	}
+	
+	log.Printf("收到绑定请求 - Token: %s, ShopID: %d", req.Token, req.ShopID)
+	
+	// 验证token的有效性
+	userID, err := utils.ParseToken(req.Token, []byte(ctrl.cfg.JWTSecret))
+	if err != nil {
+		log.Printf("无效的token: %v", err)
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    -1,
+			"message": "无效的token",
+		})
+		return
+	}
+	
+	log.Printf("点击返回首页时，用户ID: %d, shop的id为: %d, token: %s", userID, req.ShopID, req.Token)
+	
+	// 可以在这里将用户和店铺进行关联（例如，在数据库中创建关联记录）
+	// 这里暂时只返回成功信息，后续可以根据需要扩展业务逻辑
+	
+	log.Println("======= AuthBind 请求处理完成 =======")
+	
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "店铺绑定成功!",
+		"data": gin.H{
+			"user_id": userID,
+			"shop_id": req.ShopID,
+		},
+	})
+	return
 }
 
 // AuthCallback 虾皮授权回调
@@ -693,7 +742,109 @@ func (ctrl *ShopeeAuthController) AuthCallback(c *gin.Context) {
 		})
 		return
 	}
+	go func() {
+		// 调用服务拉取店铺详情
+		result, err := ctrl.orderService.FetchShopDetailFromShopee(shopID)
+		if err != nil {
+			// 检查错误是否与token过期相关
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "access_token") || strings.Contains(errMsg, "token") || strings.Contains(errMsg, "Wrong sign") {
+				log.Printf("检测到token相关错误，尝试刷新token后重试: %v", err)
 
+				// 尝试刷新token
+				refreshErr := ctrl.orderService.RefreshTokenAndRetry()
+				if refreshErr != nil {
+					log.Printf("刷新token失败: %v", refreshErr)
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"code":    -1,
+						"message": "获取店铺详情失败: " + err.Error(),
+					})
+					return
+				}
+
+				// 再次尝试调用API
+				log.Printf("刷新token成功，重新尝试拉取店铺详情...")
+				result, err = ctrl.orderService.FetchShopDetailFromShopee(shopID)
+				if err != nil {
+					log.Printf("重试拉取店铺详情仍失败: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"code":    -1,
+						"message": "获取店铺详情失败: " + err.Error(),
+					})
+					return
+				}
+			} else {
+				log.Printf("拉取店铺详情失败: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    -1,
+					"message": "获取店铺详情失败: " + err.Error(),
+				})
+				return
+			}
+		}
+		//shop_fulfillment_flag
+		/*使用此字段标识当前店铺的履约类型，适用的值包括：
+		- Pure - FBS Shop：单一模式，指仅拥有Shopee官方仓库存货的本地/跨境店铺，订单由Shopee从Shopee官方仓库履约；
+		- Pure - 3PF Shop：单一模式，指仅拥有本地卖家仓库存货的跨境店铺，订单由卖家通过本地物流渠道从本地卖家仓库履约；
+		- PFF - FBS Shop：
+		混合模式，指同时拥有Shopee官方仓库存货和本地卖家仓库存货的本地店铺，订单既可由Shopee从Shopee官方仓库履约，也可由卖家通过本地物流渠道从本地卖家仓库履约；
+		混合模式，指同时拥有Shopee官方仓库存货和跨境卖家仓库存货的跨境店铺，订单既可由Shopee从Shopee官方仓库履约，也可由卖家通过跨境物流渠道从跨境卖家仓库履约；
+		- PFF - 3PF Shop：混合模式，指同时拥有本地卖家仓库存货和跨境卖家仓库存货的跨境店铺，订单可由卖家通过本地物流渠道从本地卖家仓库履约，也可由卖家通过跨境物流渠道从跨境卖家仓库履约；
+		- LFF Hybrid Shop：混合模式，指拥有三种存货类型的跨境店铺：FBS存货（Shopee官方仓库存货）、3PF存货（跨境卖家在本地市场的自有存货）和CB SLS存货（跨境卖家在中国/香港/韩国的自有存货）；
+		- Others：其他
+		- Unknown：当获取shop_fulfillment_flag信息失败时返回
+		*/
+		type ProfileResponse struct {
+			Description string `json:"description"`
+			ShopLogo    string `json:"shop_logo"`
+			ShopName    string `json:"shop_name"`
+		}
+		type Profile struct {
+			RequestID string          `json:"request_id"`
+			Response  ProfileResponse `json:"response"`
+		}
+		type AuthResponse struct {
+			AuthTime             float64     `json:"auth_time"`
+			Error                string      `json:"error,omitempty"`
+			ExpireTime           float64     `json:"expire_time"`
+			IsCb                 bool        `json:"is_cb"`
+			IsDirectShop         bool        `json:"is_direct_shop"`
+			IsMainShop           bool        `json:"is_main_shop"`
+			IsMartShop           bool        `json:"is_mart_shop"`
+			IsOneAwb             bool        `json:"is_one_awb"`
+			IsOutletShop         bool        `json:"is_outlet_shop"`
+			IsSip                bool        `json:"is_sip"`
+			IsUpgradedCbsc       bool        `json:"is_upgraded_cbsc"`
+			LinkedDirectShopList []string    `json:"linked_direct_shop_list"`
+			LinkedMainShopID     int         `json:"linked_main_shop_id"`
+			MerchantID           interface{} `json:"merchant_id"` // 根据实际类型调整
+			Message              string      `json:"message,omitempty"`
+			Profile              Profile     `json:"profile"`
+			Region               string      `json:"region"`
+			RequestID            string      `json:"request_id"`
+			ShopFulfillmentFlag  string      `json:"shop_fulfillment_flag"`
+			ShopName             string      `json:"shop_name"`
+			Status               string      `json:"status"`
+		}
+		jsonData, _ := json.Marshal(result)
+		var r AuthResponse
+		json.Unmarshal(jsonData, &r)
+		fmt.Println(
+			r.IsOneAwb,   //是否航空运单(相对应的统一运单)
+			r.IsMartShop, //是否为Mart Shop（商城店/超市店）
+			r.IsMainShop, //是否为关联到跨境直购店的本地店铺
+			r.ShopName,
+			r.Status,
+			r.Region,
+			r.IsCb,
+			r.AuthTime,
+			r.ExpireTime,
+			r.MerchantID,
+			r.Profile.Response.ShopLogo,
+			r.Profile.Response.Description,
+			r.IsSip, //SIP主店铺或联盟店铺调用时，此字段将返回"true"
+		)
+	}()
 	// 构建前端成功回调页面 URL 并重定向
 	frontendCallbackURL := ctrl.buildFrontendCallbackURL(c, true, shopID, "")
 	c.Redirect(http.StatusFound, frontendCallbackURL)

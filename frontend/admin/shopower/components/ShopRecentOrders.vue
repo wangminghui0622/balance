@@ -240,6 +240,8 @@ const settledOrders = ref<Order[]>([
 <style scoped lang="scss">
 .orders-card {
   height: 100%;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .card-header {

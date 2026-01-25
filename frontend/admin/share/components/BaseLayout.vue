@@ -91,13 +91,13 @@
           <el-icon class="header-icon">
             <Search />
           </el-icon>
-          <el-badge :value="messageCount" class="header-icon">
+          <el-badge :value="messageCount" class="header-icon chat-badge">
             <el-icon>
-              <Message />
+              <ChatDotRound />
             </el-icon>
           </el-badge>
           <el-icon class="header-icon">
-            <User />
+            <Setting />
           </el-icon>
         </div>
       </el-header>
@@ -114,7 +114,7 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox, ElSwitch } from 'element-plus'
-import { Search, Message, User, ArrowUp, SwitchButton } from '@element-plus/icons-vue'
+import { Search, ArrowUp, SwitchButton, ChatDotRound, Setting } from '@element-plus/icons-vue'
 import type { MenuItem } from '@share/types'
 import { getApiEnv, setApiEnv } from '@share/config/api'
 import { STORAGE_KEYS, ROUTE_PATH } from '@share/constants'
@@ -212,6 +212,31 @@ const handleLogout = async () => {
   flex: 1;
   border: none;
 }
+
+:deep(.sidebar-menu .el-menu-item.is-active) {
+  color: #ff6a3a;
+  background-color: rgba(255, 106, 58, 0.08);
+}
+
+:deep(.sidebar-menu .el-menu-item:not(.is-active):hover) {
+  background-color: transparent !important;
+}
+
+:deep(.sidebar-menu .el-menu-item.is-active .el-icon) {
+  color: #ff6a3a;
+}
+
+:deep(.sidebar-menu .el-sub-menu.is-active > .el-sub-menu__title) {
+  color: #ff6a3a;
+}
+
+:deep(.sidebar-menu .el-sub-menu.is-active > .el-sub-menu__title .el-icon) {
+  color: #ff6a3a;
+}
+
+ :deep(.sidebar-menu .el-sub-menu__title:hover) {
+   background-color: transparent !important;
+ }
 
 .user-info {
   padding: 16px;
@@ -371,6 +396,17 @@ const handleLogout = async () => {
   
   &:hover {
     color: #ff6600;
+  }
+}
+
+.chat-badge {
+  :deep(.el-badge__content) {
+    background-color: #ff6a3a;
+    border: none;
+    font-size: 9px;
+    height: 14px;
+    line-height: 14px;
+    padding: 0 4px;
   }
 }
 

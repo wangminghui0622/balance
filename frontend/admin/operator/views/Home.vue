@@ -1,22 +1,11 @@
 <template>
   <div class="operator-home">
-    <!-- 顶部欢迎和通知区域 -->
+    <!-- 顶部欢迎区域 -->
     <div class="welcome-section">
       <div class="welcome-info">
         <h2>早上好! 运营</h2>
-        <p>今天店铺一切正常! 有4条通知等您查阅。</p>
+        <p>今天店铺一切正常!</p>
       </div>
-      <el-alert
-        v-if="showNotification"
-        :closable="true"
-        type="info"
-        class="notification-banner"
-        @close="showNotification = false"
-      >
-        <template #default>
-          <span>重要通知,待处理信息占位符文字占位符文字</span>
-        </template>
-      </el-alert>
     </div>
 
     <!-- 主要内容区域：左右两栏布局 -->
@@ -92,15 +81,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
 import KPICard from '../components/KPICard.vue'
 import RecentPayments from '../components/RecentPayments.vue'
 import PaymentBalance from '../components/PaymentBalance.vue'
 import MyStores from '../components/MyStores.vue'
 import RecentOrders from '../components/RecentOrders.vue'
 import WeeklyRanking from '../components/WeeklyRanking.vue'
-
-const showNotification = ref(true)
 </script>
 
 <style scoped lang="scss">
