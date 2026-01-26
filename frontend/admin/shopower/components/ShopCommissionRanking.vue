@@ -2,8 +2,16 @@
   <el-card class="ranking-card">
     <template #header>
       <div class="card-header">
-        <span>近7日佣金排行榜</span>
-        <el-button type="text" size="small">更多</el-button>
+        <span class="header-title">
+          <span class="title-bar"></span>
+          <span>近7日佣金排行榜</span>
+        </span>
+        <a href="#" class="more-link">
+          更多
+          <svg class="arrow-icon" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </a>
       </div>
     </template>
     <div class="ranking-list">
@@ -72,6 +80,39 @@ const getRankClass = (index: number) => {
   align-items: center;
   font-weight: 500;
   font-size: 16px;
+}
+
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.title-bar {
+  width: 3px;
+  height: 16px;
+  background-color: #ff6a3a;
+  border-radius: 2px;
+}
+
+.more-link {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1;
+  color: #909399;
+  text-decoration: none;
+  
+  &:hover {
+    color: #606266;
+  }
+  
+  .arrow-icon {
+    width: 12px;
+    height: 12px;
+  }
 }
 
 .ranking-list {

@@ -1,13 +1,14 @@
 <template>
   <el-card class="orders-card">
-    <el-tabs v-model="activeTab" class="order-tabs">
-      <el-tab-pane label="最近订单" name="recent">
-        <div class="orders-list">
-          <div
-            v-for="(order, index) in recentOrders"
-            :key="index"
-            class="order-item"
-          >
+    <div class="orders-header">
+      <el-tabs v-model="activeTab" class="order-tabs">
+        <el-tab-pane label="最近订单" name="recent">
+          <div class="orders-list">
+            <div
+              v-for="(order, index) in recentOrders"
+              :key="index"
+              class="order-item"
+            >
             <div class="order-header">
               <div class="order-number">
                 订单编号: {{ order.orderNo }}
@@ -130,6 +131,13 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+    <a href="#" class="all-orders-link">
+      所有订单
+      <svg class="arrow-icon" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </a>
+    </div>
   </el-card>
 </template>
 
@@ -267,6 +275,10 @@ const settledOrders = ref<Order[]>([
   font-size: 16px;
 }
 
+.orders-header {
+  position: relative;
+}
+
 .order-tabs {
   :deep(.el-tabs__header) {
     margin-bottom: 16px;
@@ -282,6 +294,29 @@ const settledOrders = ref<Order[]>([
 
   :deep(.el-tabs__active-bar) {
     background-color: #ff6a3a;
+  }
+}
+
+.all-orders-link {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1;
+  color: #909399;
+  text-decoration: none;
+  
+  &:hover {
+    color: #606266;
+  }
+  
+  .arrow-icon {
+    width: 12px;
+    height: 12px;
   }
 }
 

@@ -6,7 +6,12 @@
           <span class="title-bar"></span>
           <span>近期收益</span>
         </span>
-        <el-button type="text" size="small">更多</el-button>
+        <el-button type="text" size="small" class="detail-button">
+          查看详情
+          <svg class="arrow-icon" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </el-button>
       </div>
     </template>
     <div class="income-content">
@@ -36,37 +41,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-// 获取当前日期信息
-const now = new Date()
-const currentYear = now.getFullYear()
-const currentMonth = now.getMonth() + 1
-const currentDay = now.getDate()
-
-// 获取当前月份的天数
-const getDaysInMonth = (year: number, month: number) => {
-  return new Date(year, month, 0).getDate()
-}
-
-const daysInCurrentMonth = getDaysInMonth(currentYear, currentMonth)
-
-// 生成X轴数据（1到当前月份的最后一天）
-const xAxisData = Array.from({ length: daysInCurrentMonth }, (_, i) => i + 1)
-
-// 生成Y轴数据（只到今天为止有数据，之后为null）
-const generateSeriesData = () => {
-  const data: (number | null)[] = []
-  for (let i = 1; i <= daysInCurrentMonth; i++) {
-    if (i <= currentDay) {
-      // 今天及之前的日期有数据（示例数据）
-      data.push(1200 + Math.random() * 5000 + i * 200)
-    } else {
-      // 今天之后的日期没有数据
-      data.push(null)
-    }
-  }
-  return data
-}
-
 const chartOption = ref({
   tooltip: {
     trigger: 'axis',
@@ -89,7 +63,7 @@ const chartOption = ref({
   xAxis: {
     type: 'category',
     boundaryGap: false,
-    data: xAxisData,
+    data: Array.from({ length: 30 }, (_, i) => i + 1),
     axisLine: {
       lineStyle: {
         color: '#909399'
@@ -136,7 +110,11 @@ const chartOption = ref({
   series: [
     {
       type: 'line',
-      data: generateSeriesData(),
+      data: [
+        1200, 1800, 1500, 2200, 1900, 2500, 2100, 2800, 3200, 2900,
+        3500, 3100, 3800, 4200, 3900, 4500, 4100, 4800, 5200, 4900,
+        5500, 5100, 5800, 6200, 5900, 6500, 6100, 6800, 7200, 6900
+      ],
       smooth: true,
       symbol: 'circle',
       symbolSize: 10,
@@ -167,22 +145,6 @@ const chartOption = ref({
             { offset: 1, color: 'rgba(255, 106, 58, 0.05)' }
           ]
         }
-      },
-      markLine: {
-        symbol: 'none',
-        data: [
-          {
-            xAxis: currentDay,
-            lineStyle: {
-              color: 'rgba(144, 147, 153, 0.3)',
-              width: 1,
-              type: 'solid'
-            },
-            label: {
-              show: false
-            }
-          }
-        ]
       }
     }
   ]
@@ -192,8 +154,6 @@ const chartOption = ref({
 <style scoped lang="scss">
 .income-card {
   height: 100%;
-  border-radius: 8px;
-  overflow: hidden;
 }
 
 .card-header {
@@ -259,5 +219,21 @@ const chartOption = ref({
 .stat-item:first-child .stat-value {
   font-size: 28px;
   color: #ff6a3a;
+}
+
+.detail-button {
+  color: #909399;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  
+  &:hover {
+    color: #606266;
+  }
+}
+
+.arrow-icon {
+  width: 12px;
+  height: 12px;
 }
 </style>
