@@ -10,7 +10,12 @@
           >
             <div class="order-header">
               <div class="order-number">
-                订单编号: {{ order.orderNo }} 付款状态
+                订单编号: {{ order.orderNo }}
+                <el-tag size="small" type="success" style="margin-left: 8px;">付款状态</el-tag>
+              </div>
+              <div class="order-amount-info">
+                <span>未结算佣金: NT${{ order.unsettledCommission }}</span>
+                <span>订单金额: NT${{ order.orderAmount }}</span>
               </div>
             </div>
             <div class="order-info">
@@ -18,10 +23,16 @@
                 <span>下单时间: {{ order.orderTime }}</span>
               </div>
               <div class="info-row">
+                <span>店铺编号: {{ order.storeId }}</span>
+              </div>
+              <div class="info-row">
                 <span>店铺名称: {{ order.storeName }}</span>
               </div>
+              <div class="info-row">
+                <span>虾皮订单号: {{ order.orderNo }}</span>
+              </div>
             </div>
-            <div class="product-info">
+            <div v-if="order.product" class="product-info">
               <el-avatar :size="60" shape="square" :src="order.product.image" />
               <div class="product-details">
                 <div class="product-name">{{ order.product.name }}</div>
@@ -33,12 +44,6 @@
                   <span>数量: {{ order.product.quantity }}</span>
                   <span>小计: {{ order.product.subtotal }}</span>
                 </div>
-              </div>
-            </div>
-            <div class="order-summary">
-              <div class="summary-row">
-                <span>订单金额: NT${{ order.orderAmount }}</span>
-                <span>订单状态: {{ order.status }}</span>
               </div>
             </div>
           </div>
@@ -53,7 +58,13 @@
           >
             <div class="order-header">
               <div class="order-number">
-                订单编号: {{ order.orderNo }} 付款状态
+                订单编号: {{ order.orderNo }}
+                <el-tag size="small" type="warning" style="margin-left: 8px;">待结算</el-tag>
+              </div>
+              <div class="order-amount-info">
+                <span>未结算佣金: NT${{ order.unsettledCommission }}</span>
+                <span>未结算回款: NT${{ order.unsettledPayment }}</span>
+                <span>订单金额: NT${{ order.orderAmount }}</span>
               </div>
             </div>
             <div class="order-info">
@@ -61,10 +72,16 @@
                 <span>下单时间: {{ order.orderTime }}</span>
               </div>
               <div class="info-row">
+                <span>店铺编号: {{ order.storeId }}</span>
+              </div>
+              <div class="info-row">
                 <span>店铺名称: {{ order.storeName }}</span>
               </div>
+              <div class="info-row">
+                <span>虾皮订单号: {{ order.orderNo }}</span>
+              </div>
             </div>
-            <div class="product-info">
+            <div v-if="order.product" class="product-info">
               <el-avatar :size="60" shape="square" :src="order.product.image" />
               <div class="product-details">
                 <div class="product-name">{{ order.product.name }}</div>
@@ -76,16 +93,6 @@
                   <span>数量: {{ order.product.quantity }}</span>
                   <span>小计: {{ order.product.subtotal }}</span>
                 </div>
-              </div>
-            </div>
-            <div class="order-summary">
-              <div class="summary-row">
-                <span>未结算回款: NT${{ order.unsettledPayment }}</span>
-                <span>订单金额: NT${{ order.orderAmount }}</span>
-              </div>
-              <div class="summary-row">
-                <span>虾皮订单状态: {{ order.shopeeStatus }}</span>
-                <span>虾皮订单金额: NT${{ order.shopeeAmount }}</span>
               </div>
             </div>
           </div>
@@ -100,7 +107,12 @@
           >
             <div class="order-header">
               <div class="order-number">
-                订单编号: {{ order.orderNo }} 付款状态
+                订单编号: {{ order.orderNo }}
+                <el-tag size="small" type="success" style="margin-left: 8px;">已结算</el-tag>
+              </div>
+              <div class="order-amount-info">
+                <span>已结算回款: NT${{ order.settledPayment }}</span>
+                <span>订单金额: NT${{ order.orderAmount }}</span>
               </div>
             </div>
             <div class="order-info">
@@ -108,13 +120,10 @@
                 <span>下单时间: {{ order.orderTime }}</span>
               </div>
               <div class="info-row">
-                <span>店铺名称: {{ order.storeName }}</span>
+                <span>店铺编号: {{ order.storeId }}</span>
               </div>
-            </div>
-            <div class="order-summary">
-              <div class="summary-row">
-                <span>已结算回款: NT${{ order.settledPayment }}</span>
-                <span>订单金额: NT${{ order.orderAmount }}</span>
+              <div class="info-row">
+                <span>店铺名称: {{ order.storeName }}</span>
               </div>
             </div>
           </div>
@@ -141,9 +150,11 @@ interface Order {
   orderNo: string
   orderTime: string
   storeName: string
-  product: Product
+  storeId?: string
+  product?: Product
   orderAmount: string
   status?: string
+  unsettledCommission?: string
   unsettledPayment?: string
   shopeeStatus?: string
   shopeeAmount?: string
@@ -156,6 +167,7 @@ const recentOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078A',
     orderTime: '2025-12-11 10:30:00',
+    storeId: 'S1234567890',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -166,6 +178,7 @@ const recentOrders = ref<Order[]>([
       quantity: 1,
       subtotal: '88.00'
     },
+    unsettledCommission: '5.00',
     orderAmount: '88.00',
     status: '待处理',
     unsettledPayment: '0.00',
@@ -176,6 +189,7 @@ const recentOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078B',
     orderTime: '2025-12-11 09:15:00',
+    storeId: 'S1234567891',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -186,6 +200,7 @@ const recentOrders = ref<Order[]>([
       quantity: 2,
       subtotal: '240.00'
     },
+    unsettledCommission: '12.00',
     orderAmount: '240.00',
     status: '处理中',
     unsettledPayment: '0.00',
@@ -199,6 +214,7 @@ const unsettledOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078R',
     orderTime: '2025-12-10 23:59:59',
+    storeId: 'S1234567890',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -209,6 +225,7 @@ const unsettledOrders = ref<Order[]>([
       quantity: 1,
       subtotal: '46.00'
     },
+    unsettledCommission: '5.00',
     unsettledPayment: '8.00',
     orderAmount: '36.00',
     shopeeStatus: '待发货',
@@ -221,6 +238,7 @@ const settledOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078T',
     orderTime: '2025-12-09 15:20:00',
+    storeId: 'S1234567892',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -253,6 +271,18 @@ const settledOrders = ref<Order[]>([
   :deep(.el-tabs__header) {
     margin-bottom: 16px;
   }
+
+  :deep(.el-tabs__item.is-active) {
+    color: #303133;
+  }
+
+  :deep(.el-tabs__item:not(.is-active):hover) {
+    color: #ff6a3a;
+  }
+
+  :deep(.el-tabs__active-bar) {
+    background-color: #ff6a3a;
+  }
 }
 
 .orders-list {
@@ -272,21 +302,38 @@ const settledOrders = ref<Order[]>([
   gap: 12px;
 }
 
+.order-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .order-header .order-number {
   font-size: 14px;
   font-weight: 500;
   color: #303133;
 }
 
+.order-header .order-amount-info {
+  display: flex;
+  gap: 24px;
+  font-size: 13px;
+  color: #606266;
+}
+
 .order-info {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #909399;
+  flex-wrap: nowrap;
+  padding-left: 14px;
 }
 
 .info-row {
   font-size: 12px;
-  color: #606266;
+  color: #909399;
+  white-space: nowrap;
 }
 
 .product-info {
@@ -325,8 +372,8 @@ const settledOrders = ref<Order[]>([
 .order-summary {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: 12px;
+  gap: 6px;
+  padding-top: 8px;
   border-top: 1px solid #e4e7ed;
 }
 
@@ -335,6 +382,12 @@ const settledOrders = ref<Order[]>([
   justify-content: space-between;
   font-size: 12px;
   color: #606266;
+  
+  span {
+    &:first-child {
+      color: #909399;
+    }
+  }
 }
 </style>
 

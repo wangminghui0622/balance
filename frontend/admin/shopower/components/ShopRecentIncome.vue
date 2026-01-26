@@ -36,6 +36,37 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
+// 获取当前日期信息
+const now = new Date()
+const currentYear = now.getFullYear()
+const currentMonth = now.getMonth() + 1
+const currentDay = now.getDate()
+
+// 获取当前月份的天数
+const getDaysInMonth = (year: number, month: number) => {
+  return new Date(year, month, 0).getDate()
+}
+
+const daysInCurrentMonth = getDaysInMonth(currentYear, currentMonth)
+
+// 生成X轴数据（1到当前月份的最后一天）
+const xAxisData = Array.from({ length: daysInCurrentMonth }, (_, i) => i + 1)
+
+// 生成Y轴数据（只到今天为止有数据，之后为null）
+const generateSeriesData = () => {
+  const data: (number | null)[] = []
+  for (let i = 1; i <= daysInCurrentMonth; i++) {
+    if (i <= currentDay) {
+      // 今天及之前的日期有数据（示例数据）
+      data.push(1200 + Math.random() * 5000 + i * 200)
+    } else {
+      // 今天之后的日期没有数据
+      data.push(null)
+    }
+  }
+  return data
+}
+
 const chartOption = ref({
   tooltip: {
     trigger: 'axis',
@@ -58,7 +89,7 @@ const chartOption = ref({
   xAxis: {
     type: 'category',
     boundaryGap: false,
-    data: Array.from({ length: 30 }, (_, i) => i + 1),
+    data: xAxisData,
     axisLine: {
       lineStyle: {
         color: '#909399'
@@ -105,11 +136,7 @@ const chartOption = ref({
   series: [
     {
       type: 'line',
-      data: [
-        1200, 1800, 1500, 2200, 1900, 2500, 2100, 2800, 3200, 2900,
-        3500, 3100, 3800, 4200, 3900, 4500, 4100, 4800, 5200, 4900,
-        5500, 5100, 5800, 6200, 5900, 6500, 6100, 6800, 7200, 6900
-      ],
+      data: generateSeriesData(),
       smooth: true,
       symbol: 'circle',
       symbolSize: 10,
@@ -140,6 +167,22 @@ const chartOption = ref({
             { offset: 1, color: 'rgba(255, 106, 58, 0.05)' }
           ]
         }
+      },
+      markLine: {
+        symbol: 'none',
+        data: [
+          {
+            xAxis: currentDay,
+            lineStyle: {
+              color: 'rgba(144, 147, 153, 0.3)',
+              width: 1,
+              type: 'solid'
+            },
+            label: {
+              show: false
+            }
+          }
+        ]
       }
     }
   ]
