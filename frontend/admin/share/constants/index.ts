@@ -5,7 +5,8 @@
 // ==================== LocalStorage Keys ====================
 export const STORAGE_KEYS = {
   TOKEN: 'token',
-  USER_ID: 'userId'
+  USER_ID: 'userId',
+  USER_TYPE: 'userType'
 } as const
 
 // ==================== 用户类型 ====================

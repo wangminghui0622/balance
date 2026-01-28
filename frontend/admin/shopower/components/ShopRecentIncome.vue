@@ -6,7 +6,7 @@
           <span class="title-bar"></span>
           <span>近期收益</span>
         </span>
-        <el-button type="text" size="small" class="detail-button">
+        <el-button type="primary" link size="small" class="detail-button">
           查看详情
           <svg class="arrow-icon" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>

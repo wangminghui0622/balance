@@ -113,7 +113,7 @@
 
           <!-- 中间：我的店铺 -->
           <div class="stores-section">
-            <ShopMyStores />
+            <ShopMyStores ref="shopMyStoresRef" />
           </div>
 
           <!-- 下面：近7日佣金排行榜 -->
@@ -127,12 +127,34 @@
 </template>
 
 <script setup lang="ts">
+import { ref, watch, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import ShopKPICard from '../components/ShopKPICard.vue'
 import ShopRecentIncome from '../components/ShopRecentIncome.vue'
 import ShopPrestoreBalance from '../components/ShopPrestoreBalance.vue'
 import ShopMyStores from '../components/ShopMyStores.vue'
 import ShopRecentOrders from '../components/ShopRecentOrders.vue'
 import ShopCommissionRanking from '../components/ShopCommissionRanking.vue'
+
+const route = useRoute()
+const router = useRouter()
+const shopMyStoresRef = ref<InstanceType<typeof ShopMyStores> & { fetchShopList: () => Promise<void> } | null>(null)
+
+// 监听路由参数，如果有 refresh 参数，则刷新店铺列表
+watch(() => route.query.refresh, async (refresh) => {
+  if (refresh === 'true') {
+    // 等待组件挂载完成
+    await nextTick()
+    // 触发 ShopMyStores 组件刷新
+    if (shopMyStoresRef.value?.fetchShopList) {
+      shopMyStoresRef.value.fetchShopList()
+    }
+    // 清除 refresh 参数（避免重复刷新）
+    const newQuery = { ...route.query }
+    delete newQuery.refresh
+    router.replace({ query: newQuery })
+  }
+}, { immediate: true })
 </script>
 
 <style scoped lang="scss">

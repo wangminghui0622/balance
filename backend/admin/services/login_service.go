@@ -136,3 +136,13 @@ func (s *LoginService) Register(ctx context.Context, username, password, email s
 func (s *LoginService) generateToken(userID int64) (string, error) {
 	return shareUtils.GenerateToken(userID, s.jwtSecret, s.jwtExpiration)
 }
+
+// GetAdminByID 根据ID获取管理员信息
+func (s *LoginService) GetAdminByID(userID int64) (*models.Admin, error) {
+	return s.adminRepo.GetByID(userID)
+}
+
+// GetJWTSecret 获取JWT密钥
+func (s *LoginService) GetJWTSecret() []byte {
+	return s.jwtSecret
+}

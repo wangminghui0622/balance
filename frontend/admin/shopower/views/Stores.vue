@@ -95,7 +95,7 @@
             <div class="store-details">
               <div class="detail-item">
                 <div class="detail-label">店铺编号</div>
-                <div class="detail-value">S{{ store.storeId }}</div>
+                <div class="detail-value">{{ store.storeId }}</div>
               </div>
               <div class="detail-item">
                 <div class="detail-label">店铺账户</div>
@@ -115,7 +115,7 @@
               </div>
               <div class="detail-item">
                 <div class="detail-label">授权到期时间</div>
-                <div class="detail-value">{{ store.authExpireTime }}</div>
+                <div class="detail-value">{{ store.expireTime }}</div>
               </div>
             </div>
           </div>
@@ -132,9 +132,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
+import { shopeeApi } from '@share/api/shopee'
+import { STORAGE_KEYS, ROUTE_PATH, USER_TYPE_NUM } from '@share/constants'
 
 interface Store {
   avatar: string
@@ -145,7 +148,7 @@ interface Store {
   entityType: string // 个人/企业
   entityName: string
   health: string
-  authExpireTime: string
+  expireTime: string
   shopStatus: string // normal/paused/closed
   authStatus: string // authorized/unauthorized/expired
   operationStatus: string // operating/paused
@@ -160,99 +163,99 @@ const filterForm = reactive({
 })
 
 const exportReport = ref(false)
+const loading = ref(false)
+const storeList = ref<Store[]>([])
 
-const storeList = ref<Store[]>([
-  {
-    avatar: '',
-    name: '店铺名铺名铺名铺名铺名dasqwet',
-    storeId: '1234567890',
-    shopId: 226445936,
-    account: '1234567890@gmail.com',
-    entityType: '个人',
-    entityName: '张小凡',
-    health: '占位符',
-    authExpireTime: '2026-12-12 23:59:59',
-    shopStatus: 'normal',
-    authStatus: 'unauthorized',
-    operationStatus: 'operating',
-    authLoading: false
-  },
-  {
-    avatar: '',
-    name: '店铺名称示例文字占位符文字占位符',
-    storeId: '1234567891',
-    shopId: 226445937,
-    account: '1234567891@gmail.com',
-    entityType: '企业',
-    entityName: '示例文字占位符',
-    health: '占位符',
-    authExpireTime: '2026-12-12 23:59:59',
-    shopStatus: 'normal',
-    authStatus: 'authorized',
-    operationStatus: 'operating',
-    authLoading: false
-  },
-  {
-    avatar: '',
-    name: '店铺名称示例文字占位符文字占位符',
-    storeId: '1234567892',
-    shopId: 226445938,
-    account: '1234567892@gmail.com',
-    entityType: '个人',
-    entityName: '张小凡',
-    health: '占位符',
-    authExpireTime: '2026-12-12 23:59:59',
-    shopStatus: 'normal',
-    authStatus: 'expired',
-    operationStatus: 'paused',
-    authLoading: false
-  },
-  {
-    avatar: '',
-    name: '店铺名称示例文字占位符文字占位符',
-    storeId: '1234567893',
-    shopId: 226445939,
-    account: '1234567893@gmail.com',
-    entityType: '企业',
-    entityName: '示例文字占位符',
-    health: '占位符',
-    authExpireTime: '2026-12-12 23:59:59',
-    shopStatus: 'paused',
-    authStatus: 'authorized',
-    operationStatus: 'operating',
-    authLoading: false
-  },
-  {
-    avatar: '',
-    name: '店铺名称示例文字占位符文字占位符',
-    storeId: '1234567894',
-    shopId: 226445940,
-    account: '1234567894@gmail.com',
-    entityType: '个人',
-    entityName: '张小凡',
-    health: '占位符',
-    authExpireTime: '2026-12-12 23:59:59',
-    shopStatus: 'normal',
-    authStatus: 'unauthorized',
-    operationStatus: 'operating',
-    authLoading: false
-  },
-  {
-    avatar: '',
-    name: '店铺名称示例文字占位符文字占位符',
-    storeId: '1234567895',
-    shopId: 226445941,
-    account: '1234567895@gmail.com',
-    entityType: '企业',
-    entityName: '示例文字占位符',
-    health: '占位符',
-    authExpireTime: '2026-12-12 23:59:59',
-    shopStatus: 'normal',
-    authStatus: 'authorized',
-    operationStatus: 'operating',
-    authLoading: false
+// 检查是否为店主类型（userType=1）
+const isShopOwner = () => {
+  const userType = localStorage.getItem(STORAGE_KEYS.USER_TYPE)
+  return userType === USER_TYPE_NUM.SHOPOWNER.toString()
+}
+
+// 获取店铺列表
+const fetchShopList = async () => {
+  console.log('========== fetchShopList 开始执行 ==========')
+  
+  // 只有店主类型才能调用此接口
+  if (!isShopOwner()) {
+    console.log('不是店主类型，无法获取店铺列表')
+    ElMessage.warning('此功能仅限店主类型用户使用')
+    return
   }
-])
+
+  const token = localStorage.getItem(STORAGE_KEYS.TOKEN)
+  console.log('token存在:', !!token)
+  if (!token) {
+    console.log('没有token，跳过获取店铺列表')
+    ElMessage.warning('请先登录')
+    return
+  }
+  
+  console.log('准备调用接口: /api/v1/balance/admin/shopee/shop/list')
+
+  loading.value = true
+  try {
+    console.log('开始获取店铺列表...')
+    const res = await shopeeApi.getShopList()
+    console.log('获取店铺列表完整响应:', JSON.stringify(res, null, 2))
+    console.log('响应code:', res.code)
+    console.log('响应data:', res.data)
+    console.log('响应data类型:', Array.isArray(res.data) ? '数组' : typeof res.data)
+    console.log('响应data长度:', Array.isArray(res.data) ? res.data.length : '不是数组')
+    
+    if (res.code === 200) {
+      if (res.data && Array.isArray(res.data) && res.data.length > 0) {
+        console.log('开始处理店铺数据，数量:', res.data.length)
+        
+        // 使用完整的店铺数据
+        storeList.value = res.data.map((shop: any) => {
+          console.log('处理店铺，shopId:', shop.shopId, 'shopName:', shop.shopName, 'authStatus:', shop.authStatus)
+          
+          let authStatus = 'unauthorized'
+          if (shop.authStatus === 1) authStatus = 'authorized'
+          else if (shop.authStatus === 2) authStatus = 'expired'
+          else authStatus = 'unauthorized'
+          
+          return {
+            avatar: shop.shopSlug || '', // 可以使用店铺logo或slug作为头像
+            name: shop.shopName || `店铺 ${shop.shopId}`,
+            storeId: shop.shopIdStr || shop.shopId?.toString() || '',
+            shopId: shop.shopId,
+            account: shop.contactEmail || `shop_${shop.shopId}@example.com`,
+            entityType: shop.isCbShop ? '企业' : '个人',
+            entityName: shop.profile?.response?.shopName || `商家${shop.shopId}`,
+            health: shop.ratingStar ? `${shop.ratingStar.toFixed(2)}分` : '待评估',
+            expireTime: shop.expireTime || '未授权',
+            shopStatus: shop.status === 1 ? 'normal' : 'paused', // 假设1为正常状态
+            authStatus: authStatus,
+            operationStatus: shop.status === 1 ? 'operating' : 'paused', // 假设1为运营状态
+            authLoading: false
+          }
+        })
+        console.log('店铺列表已更新，数量:', storeList.value.length)
+      } else {
+        // 空列表
+        storeList.value = []
+        console.log('店铺列表为空，data:', res.data)
+      }
+    } else {
+      ElMessage.error(res.message || '获取店铺列表失败')
+      console.error('获取店铺列表失败，code:', res.code, 'message:', res.message)
+    }
+  } catch (err: any) {
+    console.error('获取店铺列表异常:', err)
+    console.error('错误详情:', err?.response?.data)
+    ElMessage.error(err?.response?.data?.message || err?.message || '获取店铺列表失败')
+  } finally {
+    loading.value = false
+    console.log('获取店铺列表完成，loading设置为false')
+  }
+}
+
+// 组件挂载时获取店铺列表
+onMounted(() => {
+  fetchShopList()
+})
 
 const getShopStatusType = (status: string) => {
   const map: Record<string, string> = {
@@ -306,7 +309,21 @@ const getOperationStatusText = (status: string) => {
   return map[status] || status
 }
 
+const router = useRouter()
+
 const handleQuickAuth = () => {
+  // 检测登录态
+  const token = localStorage.getItem(STORAGE_KEYS.TOKEN)
+  const userId = localStorage.getItem(STORAGE_KEYS.USER_ID)
+  
+  if (!token || !userId) {
+    ElMessage.warning('请先登录后再进行授权操作')
+    setTimeout(() => {
+      router.push(ROUTE_PATH.LOGIN)
+    }, 1500)
+    return
+  }
+
   ElMessage.info('快速授权功能开发中...')
 }
 

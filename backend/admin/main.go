@@ -18,8 +18,9 @@ func main() {
 		log.Fatal("初始化数据库失败: ", err)
 	}
 
-	// 数据库迁移（admin服务需要迁移Admin模型和ShopeeToken模型）
-	err = db.AutoMigrate(&models.Admin{}, &models.ShopeeToken{})
+	// 数据库迁移（admin服务需要迁移Admin模型、ShopeeShop模型和AdminShop关联表）
+	// 注意：ShopeeToken 表已废弃，所有数据已迁移到 ShopeeShop 表
+	err = db.AutoMigrate(&models.Admin{}, &models.ShopeeShop{}, &models.AdminShop{})
 	if err != nil {
 		log.Fatal("数据库迁移失败: ", err)
 	}

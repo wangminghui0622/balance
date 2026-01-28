@@ -4,7 +4,9 @@ import (
 	"balance/admin/dto/login"
 	"balance/admin/services"
 	"balance/internal/constants"
+	shareUtils "balance/internal/utils"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -45,8 +47,65 @@ func (ctrl *LoginController) Login(c *gin.Context) {
 		Code:    constants.ResponseCodeSuccess,
 		Message: "success",
 		Data: login.LoginData{
-			Token:  token,
-			UserID: admin.ID,
+			UserType: admin.UserType,
+			Token:    token,
+			UserID:   admin.ID,
+		},
+	})
+}
+
+// GetCurrentUser 获取当前登录用户信息
+func (ctrl *LoginController) GetCurrentUser(c *gin.Context) {
+	// 从请求头获取token
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		c.JSON(http.StatusUnauthorized, login.Response{
+			Code:    constants.HTTPStatusUnauthorized,
+			Message: "缺少Authorization头",
+		})
+		return
+	}
+
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		c.JSON(http.StatusUnauthorized, login.Response{
+			Code:    constants.HTTPStatusUnauthorized,
+			Message: "Authorization格式错误",
+		})
+		return
+	}
+
+	tokenStr := parts[1]
+	userID, err := shareUtils.ParseToken(tokenStr, ctrl.loginService.GetJWTSecret())
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, login.Response{
+			Code:    constants.HTTPStatusUnauthorized,
+			Message: "无效或过期的token",
+		})
+		return
+	}
+
+	// 查询用户信息
+	admin, err := ctrl.loginService.GetAdminByID(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, login.Response{
+			Code:    constants.HTTPStatusInternalServerError,
+			Message: "获取用户信息失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    constants.ResponseCodeSuccess,
+		"message": "success",
+		"data": gin.H{
+			"id":       admin.ID,
+			"userNo":   admin.UserNo,
+			"userType": admin.UserType,
+			"userName": admin.UserName,
+			"email":    admin.Email,
+			"phone":    admin.Phone,
+			"avatar":   admin.Avatar,
 		},
 	})
 }

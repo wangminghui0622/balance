@@ -99,9 +99,10 @@ const handleLogin = async () => {
         })
 
         if (res.code === HTTP_STATUS.OK && res.data.token) {
-          // 保存token和userId
+          // 保存token、userId和userType
           localStorage.setItem(STORAGE_KEYS.TOKEN, res.data.token)
           localStorage.setItem(STORAGE_KEYS.USER_ID, res.data.userId.toString())
+          localStorage.setItem(STORAGE_KEYS.USER_TYPE, res.data.userType.toString())
 
           ElMessage.success('登录成功')
 

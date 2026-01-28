@@ -21,13 +21,14 @@ func SetupRoutes(db *gorm.DB, redisClient *redis.Client, cfg *config.Config) *gi
 	// 初始化控制器
 	loginController := controllers.NewLoginController(loginService)
 	orderController := controllers.NewOrderController(orderService, db)
-	shopeeAuthController := controllers.NewShopeeAuthController(cfg, db, authService, orderService)
+	shopeeAuthController := controllers.NewShopeeAuthController(cfg, db, authService, orderService, redisClient)
 	authController := controllers.NewAuthController(authService)
 	// 认证路由
 	auth := r.Group("/api/v1/balance/admin/auth")
 	{
 		auth.POST("/register", loginController.Register)
 		auth.POST("/login", loginController.Login)
+		auth.GET("/me", loginController.GetCurrentUser) // 获取当前用户信息
 	}
 	baseUrl := "/api/v1/balance/admin/"
 
@@ -40,6 +41,17 @@ func SetupRoutes(db *gorm.DB, redisClient *redis.Client, cfg *config.Config) *gi
 	r.POST(baseUrl+"shopee/auth/bind", shopeeAuthController.AuthBind)
 	// Shopee 刷新令牌接口
 	r.POST(baseUrl+"shopee/auth/refresh", shopeeAuthController.RefreshToken)
+	// Shopee 发送换绑验证码接口
+	r.POST(baseUrl+"shopee/auth/rebind/send-code", shopeeAuthController.SendRebindCode)
+	// Shopee 换绑验证码验证接口
+	r.POST(baseUrl+"shopee/auth/rebind/verify", shopeeAuthController.VerifyRebindCode)
+	// Shopee 确认换绑接口
+	r.POST(baseUrl+"shopee/auth/rebind/confirm", shopeeAuthController.ConfirmRebind)
+	// Shopee 取消换绑接口
+	r.POST(baseUrl+"shopee/auth/rebind/cancel", shopeeAuthController.CancelRebind)
+
+	// Shopee 店铺列表
+	r.POST(baseUrl+"shopee/shop/list", shopeeAuthController.ShopList)
 	// Shopee 订单状态回调（对外给虾皮配置的回调地址）
 	// 示例： https://你的域名/balance/orderStatusSync/callback
 	r.POST(baseUrl+"orderStatusSync/callback", orderController.ShopeeCallback)
@@ -50,10 +62,10 @@ func SetupRoutes(db *gorm.DB, redisClient *redis.Client, cfg *config.Config) *gi
 		order.GET("/list", orderController.FetchOrders)        // 拉取订单列表
 		order.GET("/detail", orderController.FetchOrderDetail) // 拉取订单详情
 	}
-	shopee := r.Group(baseUrl + "shop")
-	{
-		shopee.GET("/list", orderController.FetchShoplist)     // 拉取店铺列表
-		shopee.GET("/detail", orderController.FetchShopdetail) // 拉取店铺详情
-	}
+	//shopee := r.Group(baseUrl + "shop")
+	//{
+	//	shopee.GET("/list", orderController.FetchShoplist)     // 拉取店铺列表
+	//	shopee.GET("/detail", orderController.FetchShopdetail) // 拉取店铺详情
+	//}
 	return r
 }

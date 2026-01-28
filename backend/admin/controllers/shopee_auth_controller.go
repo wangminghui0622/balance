@@ -5,7 +5,9 @@ import (
 	"balance/internal/config"
 	"balance/internal/models"
 	"balance/internal/utils"
+	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -27,26 +30,29 @@ type ShopeeAuthController struct {
 	authService  *services.AuthService
 	cfg          *config.Config
 	db           *gorm.DB
+	redisClient  *redis.Client
 }
 
 // NewShopeeAuthController 创建 Shopee 授权控制器
-func NewShopeeAuthController(cfg *config.Config, db *gorm.DB, authService *services.AuthService, orderService *services.OrderService) *ShopeeAuthController {
-	return &ShopeeAuthController{cfg: cfg, db: db, authService: authService, orderService: orderService}
+func NewShopeeAuthController(cfg *config.Config, db *gorm.DB, authService *services.AuthService, orderService *services.OrderService, redisClient *redis.Client) *ShopeeAuthController {
+	return &ShopeeAuthController{cfg: cfg, db: db, authService: authService, orderService: orderService, redisClient: redisClient}
 }
 
-func (ctrl *ShopeeAuthController) getShopeeConfig(shopID int64) (*models.ShopeeToken, error) {
-	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
-	token, err := tokenRepo.GetByShopID(shopID)
-	if err == nil && token != nil {
-		return token, nil
+// getShopeeConfig 从 shopee_shops 表获取店铺配置（已废弃，保留用于兼容）
+// 现在应该直接使用 ShopeeShopRepository
+func (ctrl *ShopeeAuthController) getShopeeConfig(shopID int64) (*models.ShopeeShop, error) {
+	shopRepo := models.NewShopeeShopRepository(ctrl.db)
+	shop, err := shopRepo.GetByShopID(shopID)
+	if err == nil && shop != nil {
+		return shop, nil
 	}
+	// 如果数据库中没有，尝试从配置文件获取（向后兼容）
 	if ctrl.cfg.ShopeePartnerID > 0 && ctrl.cfg.ShopeePartnerKey != "" {
-		return &models.ShopeeToken{
-			ShopID:     shopID,
-			PartnerID:  ctrl.cfg.ShopeePartnerID,
-			PartnerKey: ctrl.cfg.ShopeePartnerKey,
-			IsSandbox:  ctrl.cfg.ShopeeIsSandbox,
-			Redirect:   ctrl.cfg.ShopeeRedirect,
+		// 返回一个临时的 ShopeeShop 对象（不保存到数据库）
+		return &models.ShopeeShop{
+			ShopID:    shopID,
+			PartnerID: ctrl.cfg.ShopeePartnerID,
+			// PartnerKey 不在 ShopeeShop 表中，需要从 AuthConfig 获取
 		}, nil
 	}
 	return nil, fmt.Errorf("未找到 shop_id=%d 的 Shopee 配置", shopID)
@@ -469,29 +475,105 @@ func (ctrl *ShopeeAuthController) exchangeShopeeTokens(shopID int64, code string
 	return accessToken, refreshToken, expireIn, nil
 }
 
-// saveTokensToDatabase 保存令牌到数据库
+// saveTokensToDatabase 保存令牌到 shopee_shops 表
 func (ctrl *ShopeeAuthController) saveTokensToDatabase(shopID int64, partnerID int64, partnerKey string, isSandbox bool, redirect string, accessToken, refreshToken string, expireIn int64) error {
 	expireAt := time.Now().Add(time.Duration(expireIn) * time.Second)
-	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
-	shopeeToken := &models.ShopeeToken{
-		ShopID:        shopID,
-		PartnerID:     partnerID,
-		PartnerKey:    partnerKey, // 保留原有的 partner_key
-		AccessToken:   accessToken,
-		RefreshToken:  refreshToken,
-		TokenExpireAt: &expireAt,
-		IsSandbox:     isSandbox,
-		Redirect:      redirect, // 保留原有的 redirect
-	}
-	err := tokenRepo.CreateOrUpdate(shopeeToken)
-	if err != nil {
-		log.Printf("❌ 保存 token 到数据库失败: %v", err)
+	shopRepo := models.NewShopeeShopRepository(ctrl.db)
+
+	// 检查店铺是否已存在
+	existingShop, err := shopRepo.GetByShopID(shopID)
+	shopIDStr := strconv.FormatInt(shopID, 10)
+	now := time.Now()
+
+	if err != nil && err != gorm.ErrRecordNotFound {
+		log.Printf("❌ 查询店铺失败: %v", err)
 		return err
 	}
-	log.Printf("✅ Shopee 授权成功并已保存到数据库: shop_id=%d, access_token=%s, refresh_token=%s, expire_in=%d秒",
-		shopID, accessToken, refreshToken, expireIn)
+
+	if existingShop == nil {
+		// 店铺不存在，创建新记录
+		newShop := &models.ShopeeShop{
+			ShopID:        shopID,
+			ShopIDStr:     shopIDStr,
+			ShopName:      "店铺名称待同步", // 默认值，后续从 Shopee API 同步
+			Region:        "MY",      // 默认值，后续从 Shopee API 同步
+			PartnerID:     partnerID,
+			AccessToken:   &accessToken,
+			RefreshToken:  &refreshToken,
+			TokenExpireAt: &expireAt,
+			AuthStatus:    1, // 已授权
+			AuthTime:      &now,
+			Status:        1,     // 正常
+			Currency:      "MYR", // 默认货币
+			AutoSync:      true,
+			SyncInterval:  3600,
+			SyncItems:     true,
+			SyncOrders:    true,
+			SyncLogistics: true,
+			SyncFinance:   true,
+		}
+		err = shopRepo.CreateOrUpdate(newShop)
+		if err != nil {
+			log.Printf("❌ 保存 token 到 shopee_shops 表失败: %v", err)
+			return err
+		}
+		log.Printf("✅ Shopee 授权成功并已保存到 shopee_shops 表: shop_id=%d, access_token=%s, refresh_token=%s, expire_in=%d秒",
+			shopID, accessToken, refreshToken, expireIn)
+	} else {
+		// 店铺已存在，更新 token 信息
+		updates := map[string]interface{}{
+			"partner_id":      partnerID,
+			"access_token":    accessToken,
+			"refresh_token":   refreshToken,
+			"token_expire_at": expireAt,
+			"auth_status":     1,
+			"auth_time":       now,
+		}
+		err = ctrl.db.Model(&models.ShopeeShop{}).Where("shop_id = ?", shopID).Updates(updates).Error
+		if err != nil {
+			log.Printf("❌ 更新 token 到 shopee_shops 表失败: %v", err)
+			return err
+		}
+		log.Printf("✅ Shopee token 已更新到 shopee_shops 表: shop_id=%d, access_token=%s, refresh_token=%s, expire_in=%d秒",
+			shopID, accessToken, refreshToken, expireIn)
+	}
+
 	log.Printf("   token 过期时间: %s", expireAt.Format(time.RFC3339))
 	return nil
+}
+
+// generateVerificationCode 生成6位数字验证码
+func (ctrl *ShopeeAuthController) generateVerificationCode() string {
+	code := make([]byte, 3)
+	rand.Read(code)
+	// 生成 100000-999999 之间的6位数字
+	return fmt.Sprintf("%06d", (int(code[0])<<16|int(code[1])<<8|int(code[2]))%900000+100000)
+}
+
+// buildRebindCallbackURL 构建换绑确认页面 URL
+func (ctrl *ShopeeAuthController) buildRebindCallbackURL(c *gin.Context, shopID int64, boundAdminID int64, boundUserName, boundEmail string) string {
+	scheme := "https"
+	if c.Request.TLS == nil && c.Request.Header.Get("X-Forwarded-Proto") != "https" {
+		scheme = "http"
+	}
+	host := c.Request.Host
+
+	// 构建前端换绑确认页面 URL
+	frontendPath := "/shopee/auth/rebind"
+	if strings.Contains(host, "localhost") || strings.Contains(host, "127.0.0.1") || strings.Contains(host, ":") {
+		// 开发环境：如果 host 是后端端口（19090），替换为前端端口（3000）
+		if strings.Contains(host, ":19090") {
+			host = strings.Replace(host, ":19090", ":3000", 1)
+		} else if host == "localhost" || host == "127.0.0.1" {
+			host = "localhost:3000"
+		}
+		return fmt.Sprintf("http://%s%s?shop_id=%d&bound_admin_id=%d&bound_user_name=%s&bound_email=%s",
+			host, frontendPath, shopID, boundAdminID, url.QueryEscape(boundUserName), url.QueryEscape(boundEmail))
+	} else {
+		// 生产环境，需要加上 /balance/admin 前缀
+		return fmt.Sprintf("%s://%s/balance/admin%s?shop_id=%d&bound_admin_id=%d&bound_user_name=%s&bound_email=%s",
+			scheme, host, frontendPath, shopID, boundAdminID, url.QueryEscape(boundUserName), url.QueryEscape(boundEmail))
+	}
 }
 
 // buildFrontendCallbackURL 构建前端回调URL
@@ -505,7 +587,12 @@ func (ctrl *ShopeeAuthController) buildFrontendCallbackURL(c *gin.Context, succe
 	// 构建前端回调页面 URL（重定向到前端页面显示成功信息）
 	frontendPath := "/shopee/auth/callback"
 	if strings.Contains(host, "localhost") || strings.Contains(host, "127.0.0.1") || strings.Contains(host, ":") {
-		// 开发环境
+		// 开发环境：如果 host 是后端端口（19090），替换为前端端口（3000）
+		if strings.Contains(host, ":19090") {
+			host = strings.Replace(host, ":19090", ":3000", 1)
+		} else if host == "localhost" || host == "127.0.0.1" {
+			host = "localhost:3000"
+		}
 		if success {
 			return fmt.Sprintf("http://%s%s?success=true&shop_id=%d",
 				host, frontendPath, shopID)
@@ -537,17 +624,18 @@ func (ctrl *ShopeeAuthController) RefreshToken(c *gin.Context) {
 		})
 		return
 	}
-	// 从数据库获取 Shopee 配置
-	shopeeConfig, err := ctrl.getShopeeConfig(req.ShopID)
+	// 从数据库获取店铺配置
+	shopRepo := models.NewShopeeShopRepository(ctrl.db)
+	shop, err := shopRepo.GetByShopID(req.ShopID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    -1,
-			"message": "获取 Shopee 配置失败: " + err.Error(),
+			"message": "获取店铺配置失败: " + err.Error(),
 		})
 		return
 	}
 
-	if shopeeConfig.RefreshToken == "" {
+	if shop.RefreshToken == nil || *shop.RefreshToken == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    -1,
 			"message": "没有可用的 refresh_token",
@@ -555,13 +643,23 @@ func (ctrl *ShopeeAuthController) RefreshToken(c *gin.Context) {
 		return
 	}
 
+	// 从 AuthConfig 获取 PartnerKey 和 IsSandbox
+	authCfg, err := ctrl.authService.GetByPartnerId()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "获取授权配置失败: " + err.Error(),
+		})
+		return
+	}
+
 	// 调用工具函数，使用 refresh_token 刷新 access_token
 	accessToken, newRefreshToken, expireIn, err := utils.RefreshShopeeToken(
-		shopeeConfig.PartnerID,
-		shopeeConfig.PartnerKey,
+		shop.PartnerID,
+		authCfg.PartnerKey,
 		req.ShopID,
-		shopeeConfig.RefreshToken,
-		shopeeConfig.IsSandbox,
+		*shop.RefreshToken,
+		authCfg.IsSandbox,
 	)
 	if err != nil {
 		log.Printf("刷新 access_token 失败: %v", err)
@@ -572,10 +670,14 @@ func (ctrl *ShopeeAuthController) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// 更新数据库中的令牌信息
-	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
+	// 更新数据库中的令牌信息到 shopee_shops 表
 	expireAt := time.Now().Add(time.Duration(expireIn) * time.Second)
-	err = tokenRepo.UpdateTokens(req.ShopID, accessToken, newRefreshToken, &expireAt, nil)
+	err = ctrl.db.Model(&models.ShopeeShop{}).Where("shop_id = ?", req.ShopID).Updates(map[string]interface{}{
+		"access_token":       accessToken,
+		"refresh_token":      newRefreshToken,
+		"token_expire_at":    expireAt,
+		"last_token_refresh": time.Now(),
+	}).Error
 	if err != nil {
 		log.Printf("❌ 保存刷新后的 token 到数据库失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -605,44 +707,56 @@ func (ctrl *ShopeeAuthController) RefreshToken(c *gin.Context) {
 func (ctrl *ShopeeAuthController) AutoRefreshTokens() {
 	log.Printf("启动自动刷新 Shopee tokens 任务...")
 
-	// 获取所有有refresh_token的记录
-	tokenRepo := models.NewShopeeTokenRepository(ctrl.db)
-	allTokens, err := tokenRepo.GetAllWithRefreshToken()
+	// 获取所有有refresh_token的店铺记录
+	var shops []*models.ShopeeShop
+	err := ctrl.db.Where("refresh_token IS NOT NULL AND refresh_token != ''").Find(&shops).Error
 	if err != nil {
-		log.Printf("获取所有 Shopee tokens 失败: %v", err)
+		log.Printf("获取所有 Shopee 店铺失败: %v", err)
 		return
 	}
 
-	for _, token := range allTokens {
+	// 获取全局配置
+	authCfg, err := ctrl.authService.GetByPartnerId()
+	if err != nil {
+		log.Printf("获取授权配置失败: %v", err)
+		return
+	}
+
+	for _, shop := range shops {
 		// 检查是否需要刷新（提前1小时刷新）
-		if token.TokenExpireAt != nil {
-			refreshTime := token.TokenExpireAt.Add(-1 * time.Hour)
+		if shop.TokenExpireAt != nil && shop.RefreshToken != nil {
+			refreshTime := shop.TokenExpireAt.Add(-1 * time.Hour)
 			if time.Now().After(refreshTime) {
-				log.Printf("发现即将过期的 token (shop_id=%d)，开始自动刷新...", token.ShopID)
+				log.Printf("发现即将过期的 token (shop_id=%d)，开始自动刷新...", shop.ShopID)
 
 				// 调用刷新函数
 				accessToken, newRefreshToken, expireIn, err := utils.RefreshShopeeToken(
-					token.PartnerID,
-					token.PartnerKey,
-					token.ShopID,
-					token.RefreshToken,
-					token.IsSandbox,
+					shop.PartnerID,
+					authCfg.PartnerKey,
+					shop.ShopID,
+					*shop.RefreshToken,
+					authCfg.IsSandbox,
 				)
 				if err != nil {
-					log.Printf("自动刷新 token 失败 (shop_id=%d): %v", token.ShopID, err)
+					log.Printf("自动刷新 token 失败 (shop_id=%d): %v", shop.ShopID, err)
 					continue
 				}
 
 				// 更新数据库
 				expireAt := time.Now().Add(time.Duration(expireIn) * time.Second)
-				err = tokenRepo.UpdateTokens(token.ShopID, accessToken, newRefreshToken, &expireAt, nil)
+				err = ctrl.db.Model(&models.ShopeeShop{}).Where("shop_id = ?", shop.ShopID).Updates(map[string]interface{}{
+					"access_token":       accessToken,
+					"refresh_token":      newRefreshToken,
+					"token_expire_at":    expireAt,
+					"last_token_refresh": time.Now(),
+				}).Error
 				if err != nil {
-					log.Printf("保存刷新后的 token 到数据库失败 (shop_id=%d): %v", token.ShopID, err)
+					log.Printf("保存刷新后的 token 到数据库失败 (shop_id=%d): %v", shop.ShopID, err)
 					continue
 				}
 
 				log.Printf("✅ 自动刷新 Shopee token 成功 (shop_id=%d): 新 token 有效期至 %s",
-					token.ShopID, expireAt.Format(time.RFC3339))
+					shop.ShopID, expireAt.Format(time.RFC3339))
 			}
 		}
 	}
@@ -650,7 +764,6 @@ func (ctrl *ShopeeAuthController) AutoRefreshTokens() {
 
 func (ctrl *ShopeeAuthController) AuthBind(c *gin.Context) {
 	log.Println("======= 收到 AuthBind 请求 =======")
-	
 	var req struct {
 		Token  string `json:"token" form:"token" binding:"required"`
 		ShopID int64  `json:"shop_id" binding:"required"`
@@ -663,9 +776,7 @@ func (ctrl *ShopeeAuthController) AuthBind(c *gin.Context) {
 		})
 		return
 	}
-	
 	log.Printf("收到绑定请求 - Token: %s, ShopID: %d", req.Token, req.ShopID)
-	
 	// 验证token的有效性
 	userID, err := utils.ParseToken(req.Token, []byte(ctrl.cfg.JWTSecret))
 	if err != nil {
@@ -676,14 +787,109 @@ func (ctrl *ShopeeAuthController) AuthBind(c *gin.Context) {
 		})
 		return
 	}
-	
 	log.Printf("点击返回首页时，用户ID: %d, shop的id为: %d, token: %s", userID, req.ShopID, req.Token)
-	
-	// 可以在这里将用户和店铺进行关联（例如，在数据库中创建关联记录）
-	// 这里暂时只返回成功信息，后续可以根据需要扩展业务逻辑
-	
+
+	// 店铺注册和绑定逻辑
+	shopRepo := models.NewShopeeShopRepository(ctrl.db)
+	adminShopRepo := models.NewAdminShopRepository(ctrl.db)
+
+	// 检查 shopee_shops 表中是否已有该 shop_id 的记录
+	existingShop, err := shopRepo.GetByShopID(req.ShopID)
+	if err != nil && err != gorm.ErrRecordNotFound {
+		log.Printf("查询店铺失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "查询店铺失败: " + err.Error(),
+		})
+		return
+	}
+
+	now := time.Now()
+	shopIDStr := strconv.FormatInt(req.ShopID, 10)
+
+	if existingShop == nil {
+		// 店铺不存在，创建新记录
+		newShop := &models.ShopeeShop{
+			ShopID:        req.ShopID,
+			ShopIDStr:     shopIDStr,
+			ShopName:      "店铺名称待同步", // 默认值，后续可以从 Shopee API 同步
+			Region:        "MY",      // 默认值，后续可以从 Shopee API 同步
+			PartnerID:     0,         // 默认值
+			AuthStatus:    1,         // 已授权
+			AuthTime:      &now,
+			Status:        1,     // 正常
+			Currency:      "MYR", // 默认货币
+			AutoSync:      true,
+			SyncInterval:  3600,
+			SyncItems:     true,
+			SyncOrders:    true,
+			SyncLogistics: true,
+			SyncFinance:   true,
+		}
+
+		err = shopRepo.CreateOrUpdate(newShop)
+		if err != nil {
+			log.Printf("创建店铺记录失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    -1,
+				"message": "创建店铺记录失败: " + err.Error(),
+			})
+			return
+		}
+		log.Printf("✅ 成功创建店铺记录: shop_id=%d", req.ShopID)
+	} else {
+		// 店铺已存在，更新授权状态和时间
+		err = shopRepo.UpdateAuthStatus(req.ShopID, 1, &now)
+		if err != nil {
+			log.Printf("更新店铺授权状态失败: %v", err)
+		}
+	}
+
+	// 检查该 admin 是否已有其他店铺
+	adminShops, err := adminShopRepo.GetByAdminID(userID)
+	if err != nil {
+		log.Printf("查询 admin 的店铺列表失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "查询店铺列表失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 如果这是该 admin 的第一个店铺，设置为主店铺
+	isPrimary := len(adminShops) == 0
+
+	// 创建或更新关联关系
+	adminShop := &models.AdminShop{
+		AdminID:   userID,
+		ShopID:    req.ShopID,
+		IsPrimary: isPrimary,
+		Status:    1, // 正常
+	}
+
+	err = adminShopRepo.CreateOrUpdate(adminShop)
+	if err != nil {
+		log.Printf("创建关联关系失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "创建关联关系失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 如果设置为主店铺，确保其他店铺不是主店铺
+	if isPrimary {
+		err = adminShopRepo.SetPrimary(userID, req.ShopID)
+		if err != nil {
+			log.Printf("设置主店铺失败: %v", err)
+			// 不返回错误，因为这不是关键操作
+		}
+	}
+
+	log.Printf("✅ 成功绑定 admin 和 shop: admin_id=%d, shop_id=%d, is_primary=%v", userID, req.ShopID, isPrimary)
+
 	log.Println("======= AuthBind 请求处理完成 =======")
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "店铺绑定成功!",
@@ -724,7 +930,47 @@ func (ctrl *ShopeeAuthController) AuthCallback(c *gin.Context) {
 		c.Redirect(http.StatusFound, frontendCallbackURL)
 		return
 	}
+	fmt.Println("***************accessToken, refreshToken, expireIn获取正常***********************")
+	// 检查 admin_shop 是否已经绑定
+	adminShopRepo := models.NewAdminShopRepository(ctrl.db)
+	existingBindings, err := adminShopRepo.GetByShopID(shopID)
+	if err != nil && err != gorm.ErrRecordNotFound {
+		log.Printf("查询店铺绑定关系失败: %v", err)
+		// 继续执行，不阻断流程
+	}
 
+	// 如果已绑定，需要验证邮箱换绑
+	if len(existingBindings) > 0 {
+		fmt.Println("***************已绑定过***********************")
+		// 获取已绑定的 admin 信息
+		adminRepo := models.NewAdminRepository(ctrl.db)
+		boundAdmin, err := adminRepo.GetByID(existingBindings[0].AdminID)
+		if err != nil {
+			log.Printf("获取已绑定管理员信息失败: %v", err)
+			// 继续执行，不阻断流程
+		} else {
+			// 将 token 信息临时存储到 Redis，等待用户点击发送验证码
+			// Key: shop_bind_pending:{shop_id}
+			// Value: {admin_id}:{access_token}:{refresh_token}:{expire_in}
+			ctx := context.Background()
+			pendingKey := fmt.Sprintf("shop_bind_pending:%d", shopID)
+			pendingValue := fmt.Sprintf("%d:%s:%s:%d", boundAdmin.ID, accessToken, refreshToken, expireIn)
+			err = ctrl.redisClient.Set(ctx, pendingKey, pendingValue, 10*time.Minute).Err()
+			if err != nil {
+				fmt.Println("***************33333333333333333***********************")
+				log.Printf("保存待绑定信息到 Redis 失败: %v", err)
+				// 如果 Redis 失败，继续执行，直接更新 token
+			} else {
+				fmt.Println("***************444444444444444444***********************")
+				// 重定向到前端换绑确认页面（用户需要点击"发送验证码"按钮）
+				frontendCallbackURL := ctrl.buildRebindCallbackURL(c, shopID, boundAdmin.ID, boundAdmin.UserName, boundAdmin.Email)
+				log.Printf("重定向到前端换绑页面: %s", frontendCallbackURL)
+				c.Redirect(http.StatusFound, frontendCallbackURL)
+				return
+			}
+		}
+	}
+	fmt.Println("************************未绑定过***********************************")
 	// 保存 token 到数据库
 	err = ctrl.saveTokensToDatabase(shopID, authCfg.PartnerID, authCfg.PartnerKey, authCfg.IsSandbox,
 		authCfg.Redirect, accessToken, refreshToken, expireIn)
@@ -844,10 +1090,676 @@ func (ctrl *ShopeeAuthController) AuthCallback(c *gin.Context) {
 			r.Profile.Response.Description,
 			r.IsSip, //SIP主店铺或联盟店铺调用时，此字段将返回"true"
 		)
+
+		// 将店铺信息保存到 shopee_shops 表
+		shopRepo := models.NewShopeeShopRepository(ctrl.db)
+		shopIDStr := strconv.FormatInt(shopID, 10)
+
+		// 解析 MerchantID
+		var merchantID *int64
+		if r.MerchantID != nil {
+			switch v := r.MerchantID.(type) {
+			case float64:
+				id := int64(v)
+				merchantID = &id
+			case int:
+				id := int64(v)
+				merchantID = &id
+			case int64:
+				merchantID = &v
+			}
+		}
+
+		// 解析时间
+		var authTime *time.Time
+		if r.AuthTime > 0 {
+			t := time.Unix(int64(r.AuthTime), 0)
+			authTime = &t
+		}
+
+		// 解析店铺状态
+		var status int16 = 1 // 默认正常
+		if r.Status == "NORMAL" {
+			status = 1
+		} else if r.Status == "BANNED" {
+			status = 2
+		} else if r.Status == "FROZEN" {
+			status = 3
+		} else if r.Status == "CLOSED" {
+			status = 4
+		}
+
+		// 获取现有店铺信息（保留 token 等信息）
+		existingShop, err := shopRepo.GetByShopID(shopID)
+		if err != nil && err != gorm.ErrRecordNotFound {
+			log.Printf("❌ 查询店铺信息失败: %v", err)
+			return
+		}
+
+		// 创建或更新店铺记录
+		shop := &models.ShopeeShop{
+			ShopID:     shopID,
+			ShopIDStr:  shopIDStr,
+			ShopName:   r.ShopName,
+			Region:     r.Region,
+			IsCbShop:   r.IsCb,
+			Status:     status,
+			AuthStatus: 1,
+			AuthTime:   authTime,
+			MerchantID: merchantID,
+		}
+
+		// 如果店铺已存在，合并现有数据
+		if existingShop != nil {
+			shop.PartnerID = existingShop.PartnerID
+			shop.AccessToken = existingShop.AccessToken
+			shop.RefreshToken = existingShop.RefreshToken
+			shop.TokenExpireAt = existingShop.TokenExpireAt
+			// 不再更新 owner_id，因为现在使用关联表
+			shop.Currency = existingShop.Currency
+			shop.AutoSync = existingShop.AutoSync
+			shop.SyncInterval = existingShop.SyncInterval
+			shop.SyncItems = existingShop.SyncItems
+			shop.SyncOrders = existingShop.SyncOrders
+			shop.SyncLogistics = existingShop.SyncLogistics
+			shop.SyncFinance = existingShop.SyncFinance
+		} else {
+			// 新店铺，设置默认值
+			shop.Currency = "MYR"
+			shop.AutoSync = true
+			shop.SyncInterval = 3600
+			shop.SyncItems = true
+			shop.SyncOrders = true
+			shop.SyncLogistics = true
+			shop.SyncFinance = true
+		}
+
+		err = shopRepo.CreateOrUpdate(shop)
+		if err != nil {
+			log.Printf("❌ 保存店铺信息到 shopee_shops 表失败: %v", err)
+		} else {
+			log.Printf("✅ 店铺信息已保存到 shopee_shops 表: shop_id=%d, shop_name=%s, region=%s", shopID, r.ShopName, r.Region)
+		}
 	}()
 	// 构建前端成功回调页面 URL 并重定向
 	frontendCallbackURL := ctrl.buildFrontendCallbackURL(c, true, shopID, "")
 	c.Redirect(http.StatusFound, frontendCallbackURL)
+}
+
+// SendRebindCode 发送换绑验证码到邮箱
+// POST /api/v1/balance/admin/shopee/auth/rebind/send-code
+func (ctrl *ShopeeAuthController) SendRebindCode(c *gin.Context) {
+	var req struct {
+		ShopID int64 `json:"shop_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	// 从 Redis 获取待绑定信息
+	ctx := context.Background()
+	pendingKey := fmt.Sprintf("shop_bind_pending:%d", req.ShopID)
+	pendingValue, err := ctrl.redisClient.Get(ctx, pendingKey).Result()
+	if err == redis.Nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "待绑定信息已过期或不存在",
+		})
+		return
+	} else if err != nil {
+		log.Printf("从 Redis 获取待绑定信息失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "获取信息失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 解析待绑定信息: {admin_id}:{access_token}:{refresh_token}:{expire_in}
+	parts := strings.Split(pendingValue, ":")
+	if len(parts) != 4 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "待绑定信息格式错误",
+		})
+		return
+	}
+
+	boundAdminID, _ := strconv.ParseInt(parts[0], 10, 64)
+	accessToken := parts[1]
+	refreshToken := parts[2]
+	expireIn, _ := strconv.ParseInt(parts[3], 10, 64)
+
+	// 获取已绑定的 admin 信息
+	adminRepo := models.NewAdminRepository(ctrl.db)
+	boundAdmin, err := adminRepo.GetByID(boundAdminID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "获取管理员信息失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 生成验证码（6位数字）
+	verificationCode := ctrl.generateVerificationCode()
+
+	// 将验证码存储到 Redis，有效期 10 分钟
+	// Key: shop_bind_verify:{shop_id}
+	// Value: {admin_id}:{verification_code}:{access_token}:{refresh_token}:{expire_in}
+	verifyKey := fmt.Sprintf("shop_bind_verify:%d", req.ShopID)
+	verifyValue := fmt.Sprintf("%d:%s:%s:%s:%d", boundAdminID, verificationCode, accessToken, refreshToken, expireIn)
+	err = ctrl.redisClient.Set(ctx, verifyKey, verifyValue, 10*time.Minute).Err()
+	if err != nil {
+		log.Printf("保存验证码到 Redis 失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "生成验证码失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 发送验证码到邮箱（这里先记录日志，实际应该发送邮件）
+	log.Printf("验证码已生成并发送: shop_id=%d, bound_admin_id=%d, bound_email=%s, verification_code=%s",
+		req.ShopID, boundAdminID, boundAdmin.Email, verificationCode)
+
+	// TODO: 实际发送邮件到 boundAdmin.Email
+	// 这里应该调用邮件服务发送验证码
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "验证码已发送到邮箱",
+		"data": gin.H{
+			"shop_id": req.ShopID,
+			"email":   boundAdmin.Email,
+		},
+	})
+}
+
+// VerifyRebindCode 验证换绑验证码
+// POST /api/v1/balance/admin/shopee/auth/rebind/verify
+func (ctrl *ShopeeAuthController) VerifyRebindCode(c *gin.Context) {
+	var req struct {
+		ShopID int64  `json:"shop_id" binding:"required"`
+		Code   string `json:"code" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	// 从 Redis 获取验证码信息
+	ctx := context.Background()
+	verifyKey := fmt.Sprintf("shop_bind_verify:%d", req.ShopID)
+	verifyValue, err := ctrl.redisClient.Get(ctx, verifyKey).Result()
+	if err == redis.Nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "验证码已过期或不存在，请重新发送",
+		})
+		return
+	} else if err != nil {
+		log.Printf("从 Redis 获取验证码失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "验证失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 解析验证码信息: {admin_id}:{verification_code}:{access_token}:{refresh_token}:{expire_in}
+	parts := strings.Split(verifyValue, ":")
+	if len(parts) != 5 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "验证码格式错误",
+		})
+		return
+	}
+
+	boundAdminID, _ := strconv.ParseInt(parts[0], 10, 64)
+	storedCode := parts[1]
+	// accessToken, refreshToken, expireIn 在 ConfirmRebind 中使用
+
+	// 验证验证码
+	if req.Code != storedCode {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "验证码错误",
+		})
+		return
+	}
+
+	// 验证码正确，返回成功（前端可以继续调用换绑接口）
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "验证码验证成功",
+		"data": gin.H{
+			"shop_id":        req.ShopID,
+			"bound_admin_id": boundAdminID,
+		},
+	})
+}
+
+// ConfirmRebind 确认换绑（需要先验证验证码）
+// POST /api/v1/balance/admin/shopee/auth/rebind/confirm
+func (ctrl *ShopeeAuthController) ConfirmRebind(c *gin.Context) {
+	var req struct {
+		ShopID     int64  `json:"shop_id" binding:"required"`
+		Code       string `json:"code" binding:"required"`
+		NewAdminID int64  `json:"new_admin_id" binding:"required"` // 新绑定的 admin ID（从 token 中获取）
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	// 从 Redis 获取验证码信息
+	ctx := context.Background()
+	verifyKey := fmt.Sprintf("shop_bind_verify:%d", req.ShopID)
+	verifyValue, err := ctrl.redisClient.Get(ctx, verifyKey).Result()
+	if err == redis.Nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "验证码已过期或不存在",
+		})
+		return
+	} else if err != nil {
+		log.Printf("从 Redis 获取验证码失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "验证失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 解析验证码信息
+	parts := strings.Split(verifyValue, ":")
+	if len(parts) != 5 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "验证码格式错误",
+		})
+		return
+	}
+
+	boundAdminID, _ := strconv.ParseInt(parts[0], 10, 64)
+	storedCode := parts[1]
+	accessToken := parts[2]
+	refreshToken := parts[3]
+	expireIn, _ := strconv.ParseInt(parts[4], 10, 64)
+
+	// 验证验证码
+	if req.Code != storedCode {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "验证码错误",
+		})
+		return
+	}
+
+	// 删除旧的绑定关系
+	adminShopRepo := models.NewAdminShopRepository(ctrl.db)
+	err = adminShopRepo.Delete(boundAdminID, req.ShopID)
+	if err != nil {
+		log.Printf("删除旧绑定关系失败: %v", err)
+		// 继续执行，不阻断流程
+	}
+
+	// 创建新的绑定关系
+	// 检查新 admin 是否已有其他店铺
+	adminShops, err := adminShopRepo.GetByAdminID(req.NewAdminID)
+	if err != nil {
+		log.Printf("查询新 admin 的店铺列表失败: %v", err)
+	}
+	isPrimary := len(adminShops) == 0
+
+	newAdminShop := &models.AdminShop{
+		AdminID:   req.NewAdminID,
+		ShopID:    req.ShopID,
+		IsPrimary: isPrimary,
+		Status:    1,
+	}
+	err = adminShopRepo.CreateOrUpdate(newAdminShop)
+	if err != nil {
+		log.Printf("创建新绑定关系失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "换绑失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 如果设置为主店铺，确保其他店铺不是主店铺
+	if isPrimary {
+		err = adminShopRepo.SetPrimary(req.NewAdminID, req.ShopID)
+		if err != nil {
+			log.Printf("设置主店铺失败: %v", err)
+		}
+	}
+
+	// 更新 token 到店铺表
+	expireAt := time.Now().Add(time.Duration(expireIn) * time.Second)
+	err = ctrl.db.Model(&models.ShopeeShop{}).Where("shop_id = ?", req.ShopID).Updates(map[string]interface{}{
+		"access_token":    accessToken,
+		"refresh_token":   refreshToken,
+		"token_expire_at": expireAt,
+		"auth_status":     1,
+		"auth_time":       time.Now(),
+	}).Error
+	if err != nil {
+		log.Printf("更新 token 失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "换绑成功，但更新 token 失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 删除 Redis 中的验证码和待绑定信息
+	ctrl.redisClient.Del(ctx, verifyKey)
+	pendingKey := fmt.Sprintf("shop_bind_pending:%d", req.ShopID)
+	ctrl.redisClient.Del(ctx, pendingKey)
+
+	log.Printf("✅ 换绑成功: shop_id=%d, 旧 admin_id=%d, 新 admin_id=%d", req.ShopID, boundAdminID, req.NewAdminID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "换绑成功",
+		"data": gin.H{
+			"shop_id":      req.ShopID,
+			"old_admin_id": boundAdminID,
+			"new_admin_id": req.NewAdminID,
+		},
+	})
+}
+
+// ShopList 获取当前用户的所有店铺列表
+// POST /api/v1/balance/admin/shopee/shop/list
+func (ctrl *ShopeeAuthController) ShopList(c *gin.Context) {
+	fmt.Println("********************ShopList11111*****************************")
+	// 从请求头获取token
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    -1,
+			"message": "缺少Authorization头",
+		})
+		return
+	}
+	fmt.Println("********************ShopList2222222*****************************")
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    -1,
+			"message": "Authorization格式错误",
+		})
+		return
+	}
+	fmt.Println("********************ShopList3333333*****************************")
+	tokenStr := parts[1]
+	userID, err := utils.ParseToken(tokenStr, []byte(ctrl.cfg.JWTSecret))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    -1,
+			"message": "无效或过期的token",
+		})
+		return
+	}
+
+	// 验证用户类型，只有店主类型（userType=1）才能访问此接口
+	adminRepo := models.NewAdminRepository(ctrl.db)
+	admin, err := adminRepo.GetByID(userID)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    -1,
+			"message": "获取用户信息失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 只有店主类型（userType=1）才能访问
+	if admin.UserType != 1 {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    -1,
+			"message": "此接口仅限店主类型用户访问",
+		})
+		return
+	}
+
+	fmt.Println("********************ShopList4444444*****************************")
+	// 查询 admin_shop 表，获取该用户关联的所有店铺 shop_id
+	adminShopRepo := models.NewAdminShopRepository(ctrl.db)
+	adminShops, err := adminShopRepo.GetByAdminID(userID)
+	if err != nil {
+		log.Printf("查询用户店铺关联失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "查询店铺关联失败: " + err.Error(),
+		})
+		return
+	}
+	fmt.Println("********************ShopList55555555*****************************")
+	// 如果没有关联的店铺，返回空列表
+	if len(adminShops) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "success",
+			"data":    []interface{}{},
+		})
+		return
+	}
+
+	// 提取所有 shop_id
+	shopIDs := make([]int64, 0, len(adminShops))
+	for _, adminShop := range adminShops {
+		shopIDs = append(shopIDs, adminShop.ShopID)
+	}
+
+	// 根据多个 shop_id 查询 shopee_shops 表，获取店铺详细信息
+	var shops []*models.ShopeeShop
+	err = ctrl.db.Where("shop_id IN ?", shopIDs).Find(&shops).Error
+	if err != nil {
+		log.Printf("查询店铺详细信息失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "查询店铺详细信息失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 构建返回数据 - 返回完整的店铺信息（与数据库模型一致）
+	shopList := make([]gin.H, 0, len(shops))
+	for _, shop := range shops {
+		// 查找对应的 admin_shop 关联信息
+		var adminShop *models.AdminShop
+		for _, as := range adminShops {
+			if as.ShopID == shop.ShopID {
+				adminShop = as
+				break
+			}
+		}
+		t := time.Unix(shop.ExpireTime, 0)
+		const layout = "2006-01-02 15:04:05"
+		expireTime := t.Format(layout)
+		shopData := gin.H{
+			"id":                  shop.ID,
+			"shopId":              shop.ShopID,
+			"shopIdStr":           shop.ShopIDStr,
+			"shopName":            shop.ShopName,
+			"shopSlug":            shop.ShopSlug,
+			"region":              shop.Region,
+			"partnerId":           shop.PartnerID,
+			"expireTime":          expireTime,
+			"authStatus":          shop.AuthStatus,
+			"status":              shop.Status,
+			"suspensionStatus":    shop.SuspensionStatus,
+			"isCbShop":            shop.IsCbShop,
+			"isCodShop":           shop.IsCodShop,
+			"isPreferredPlusShop": shop.IsPreferredPlusShop,
+			"isShopeeVerified":    shop.IsShopeeVerified,
+			"ratingStar":          shop.RatingStar,
+			"ratingBad":           shop.RatingBad,
+			"ratingGood":          shop.RatingGood,
+			"ratingNormal":        shop.RatingNormal,
+			"itemCount":           shop.ItemCount,
+			"followerCount":       shop.FollowerCount,
+			"responseRate":        shop.ResponseRate,
+			"responseTime":        shop.ResponseTime,
+			"cancellationRate":    shop.CancellationRate,
+			"totalSales":          shop.TotalSales,
+			"totalOrders":         shop.TotalOrders,
+			"totalViews":          shop.TotalViews,
+			"dailySales":          shop.DailySales,
+			"monthlySales":        shop.MonthlySales,
+			"yearlySales":         shop.YearlySales,
+			"currency":            shop.Currency,
+			"balance":             shop.Balance,
+			"pendingBalance":      shop.PendingBalance,
+			"withdrawnBalance":    shop.WithdrawnBalance,
+			"contactEmail":        shop.ContactEmail,
+			"contactPhone":        shop.ContactPhone,
+			"country":             shop.Country,
+			"city":                shop.City,
+			"address":             shop.Address,
+			"zipcode":             shop.Zipcode,
+			"autoSync":            shop.AutoSync,
+			"syncInterval":        shop.SyncInterval,
+			"syncItems":           shop.SyncItems,
+			"syncOrders":          shop.SyncOrders,
+			"syncLogistics":       shop.SyncLogistics,
+			"syncFinance":         shop.SyncFinance,
+			"isPrimary":           false,
+			"authTime":            nil,
+			"tokenExpireAt":       nil,
+			"lastSyncAt":          nil,
+			"nextSyncAt":          nil,
+			"shopCreatedAt":       nil,
+			"createdAt":           shop.CreatedAt.Format(time.RFC3339),
+			"updatedAt":           shop.UpdatedAt.Format(time.RFC3339),
+		}
+
+		// 添加 admin_shop 关联信息
+		if adminShop != nil {
+			shopData["isPrimary"] = adminShop.IsPrimary
+		}
+
+		// 处理可选的时间字段
+		if shop.AuthTime != nil {
+			shopData["authTime"] = shop.AuthTime.Format(time.RFC3339)
+		}
+		if shop.TokenExpireAt != nil {
+			shopData["tokenExpireAt"] = shop.TokenExpireAt.Format(time.RFC3339)
+		}
+		if shop.LastSyncAt != nil {
+			shopData["lastSyncAt"] = shop.LastSyncAt.Format(time.RFC3339)
+		}
+		if shop.NextSyncAt != nil {
+			shopData["nextSyncAt"] = shop.NextSyncAt.Format(time.RFC3339)
+		}
+		if shop.ShopCreatedAt != nil {
+			shopData["shopCreatedAt"] = shop.ShopCreatedAt.Format(time.RFC3339)
+		}
+
+		shopList = append(shopList, shopData)
+	}
+	fmt.Println("**************shopList:**********************", shopList)
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "success",
+		"data":    shopList,
+	})
+}
+
+// CancelRebind 取消换绑（只更新 token，不换绑）
+// POST /api/v1/balance/admin/shopee/auth/rebind/cancel
+func (ctrl *ShopeeAuthController) CancelRebind(c *gin.Context) {
+	var req struct {
+		ShopID int64 `json:"shop_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	// 从 Redis 获取待绑定信息（包含 token）
+	ctx := context.Background()
+	pendingKey := fmt.Sprintf("shop_bind_pending:%d", req.ShopID)
+	pendingValue, err := ctrl.redisClient.Get(ctx, pendingKey).Result()
+	if err == redis.Nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "待绑定信息已过期或不存在",
+		})
+		return
+	} else if err != nil {
+		log.Printf("从 Redis 获取待绑定信息失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "操作失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 解析待绑定信息: {admin_id}:{access_token}:{refresh_token}:{expire_in}
+	parts := strings.Split(pendingValue, ":")
+	if len(parts) != 4 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    -1,
+			"message": "待绑定信息格式错误",
+		})
+		return
+	}
+
+	accessToken := parts[1]
+	refreshToken := parts[2]
+	expireIn, _ := strconv.ParseInt(parts[3], 10, 64)
+
+	// 只更新 token，不换绑
+	expireAt := time.Now().Add(time.Duration(expireIn) * time.Second)
+	err = ctrl.db.Model(&models.ShopeeShop{}).Where("shop_id = ?", req.ShopID).Updates(map[string]interface{}{
+		"access_token":    accessToken,
+		"refresh_token":   refreshToken,
+		"token_expire_at": expireAt,
+		"auth_status":     1,
+		"auth_time":       time.Now(),
+	}).Error
+	if err != nil {
+		log.Printf("更新 token 失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    -1,
+			"message": "更新 token 失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 删除 Redis 中的待绑定信息和验证码
+	ctrl.redisClient.Del(ctx, pendingKey)
+	verifyKey := fmt.Sprintf("shop_bind_verify:%d", req.ShopID)
+	ctrl.redisClient.Del(ctx, verifyKey)
+
+	log.Printf("✅ 取消换绑，已更新 token: shop_id=%d", req.ShopID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "已取消换绑，token 已更新",
+		"data": gin.H{
+			"shop_id": req.ShopID,
+		},
+	})
 }
 
 //func (ctrl *ShopeeAuthController) AuthCallback(c *gin.Context) {

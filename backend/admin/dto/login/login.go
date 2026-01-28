@@ -39,8 +39,9 @@ type LoginResponse struct {
 
 // LoginData 登录数据
 type LoginData struct {
-	Token  string `json:"token"`
-	UserID int64  `json:"userId"`
+	UserType int8   `json:"userType" binding:"required"`
+	Token    string `json:"token"`
+	UserID   int64  `json:"userId"`
 }
 
 // RegisterResponse 注册响应

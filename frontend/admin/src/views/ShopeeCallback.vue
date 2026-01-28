@@ -142,17 +142,23 @@ const autoBindShop = async () => {
         console.log('自动绑定成功:', responseData);
         ElMessage.success('店铺绑定成功！');
         
-        // 绑定成功后跳转到首页
+        // 绑定成功后跳转到首页，并传递刷新参数
         console.log('跳转到首页');
         setTimeout(() => {
-          router.push('/');
+          router.push({
+            path: '/',
+            query: { refresh: 'true' }
+          });
         }, 1500); // 稍微延迟一下，让用户看到成功消息
       } else {
         console.error('自动绑定失败，响应代码:', responseData.code);
         ElMessage.error('店铺绑定失败，请稍后重试');
         // 即使绑定失败也跳转到首页
         setTimeout(() => {
-          router.push('/');
+          router.push({
+            path: '/',
+            query: { refresh: 'true' }
+          });
         }, 1500);
       }
     } catch (bindError) {
@@ -168,7 +174,10 @@ const autoBindShop = async () => {
     // 如果没有token，则直接跳转到首页
     console.log('无token，直接跳转到首页');
     setTimeout(() => {
-      router.push('/');
+      router.push({
+        path: '/',
+        query: { refresh: 'true' }
+      });
     }, 1500);
   }
 }

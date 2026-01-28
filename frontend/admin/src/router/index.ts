@@ -25,6 +25,11 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/ShopeeCallback.vue')
   },
   {
+    path: '/shopee/auth/rebind',
+    name: 'shopee-auth-rebind',
+    component: () => import('../views/ShopeeRebind.vue')
+  },
+  {
     path: '/',
     redirect: () => {
       // 根据用户ID前缀重定向

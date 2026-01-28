@@ -3,6 +3,7 @@ package controllers
 import (
 	"balance/admin/services"
 	"balance/internal/models"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -66,7 +67,7 @@ func (ctrl *OrderController) FetchShoplist(c *gin.Context) {
 			return
 		}
 	}
-
+	fmt.Println("result:", result)
 	// 返回结果
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
