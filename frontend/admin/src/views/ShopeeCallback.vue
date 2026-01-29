@@ -164,9 +164,12 @@ const autoBindShop = async () => {
     } catch (bindError) {
       console.error('自动绑定失败:', bindError);
       ElMessage.error('店铺绑定请求失败，请稍后重试');
-      // 即使绑定失败也跳转到首页
+      // 即使绑定失败也跳转到首页，并传递刷新参数
       setTimeout(() => {
-        router.push('/');
+        router.push({
+          path: '/',
+          query: { refresh: 'true' }
+        });
       }, 1500);
     }
   } else {

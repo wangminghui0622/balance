@@ -73,7 +73,7 @@
 
 <script setup lang="ts">
 	import { ref, onMounted, onActivated, computed } from 'vue'
-	import { useRouter } from 'vue-router'
+	import { useRouter, useRoute } from 'vue-router'
 	import { ElMessage } from 'element-plus'
 	import { shopeeApi, type ShopeeShop } from '@share/api/shopee'
 	import { STORAGE_KEYS, ROUTE_PATH, USER_TYPE_NUM } from '@share/constants'
@@ -91,6 +91,7 @@
 	const storeList = ref<Store[]>([])
 	const loading = ref(false)
 	const router = useRouter()
+	const route = useRoute()
 
 	// 检查是否为店主类型（userType=1）
 	const isShopOwner = computed(() => {
@@ -101,9 +102,9 @@
 	})
 
 	// 获取店铺列表
-	const fetchShopList = async () => {
+	const fetchShopList = async (forceRefresh: boolean = false) => {
 		console.log('========== fetchShopList 开始执行 ==========')
-		console.log('fetchShopList 被调用')
+		console.log('fetchShopList 被调用, forceRefresh:', forceRefresh)
 		console.log('isShopOwner.value:', isShopOwner.value)
 		
 		// 只有店主类型才能调用此接口
@@ -122,6 +123,11 @@
 		}
 		
 		console.log('准备调用接口: /api/v1/balance/admin/shopee/shop/list')
+
+		// 如果是强制刷新，先清空旧数据
+		if (forceRefresh) {
+			storeList.value = []
+		}
 
 		loading.value = true
 		try {
@@ -177,14 +183,20 @@
 		}
 	}
 
-	// 组件挂载时获取店铺列表
+	// 组件挂载时获取店铺列表（但如果有 refresh 参数，让父组件控制刷新）
 	onMounted(() => {
-		fetchShopList()
+		// 检查路由参数，如果有 refresh 参数，不在这里执行，让父组件控制
+		if (route.query.refresh !== 'true') {
+			fetchShopList()
+		}
 	})
 
 	// 组件激活时刷新店铺列表（用于从授权回调页面返回时刷新）
 	onActivated(() => {
-		fetchShopList()
+		// 如果有 refresh 参数，让父组件控制刷新
+		if (route.query.refresh !== 'true') {
+			fetchShopList()
+		}
 	})
 
 
@@ -196,8 +208,8 @@
 		}
 		console.log('========== goToStores 被调用 ==========')
 		console.log('点击事件:', event)
-		ElMessage.info('正在刷新店铺列表...')
-		fetchShopList()
+		// 跳转到店铺列表页面
+		router.push('/shopowner/stores')
 	}
 
 	// 暴露方法给父组件调用

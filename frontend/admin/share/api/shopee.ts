@@ -103,7 +103,7 @@ export interface ShopeeShop {
   syncFinance: boolean
   isPrimary: boolean
   authTime: string | null
-  tokenExpireAt: string | null
+  expireTime: string | null
   lastSyncAt: string | null
   nextSyncAt: string | null
   shopCreatedAt: string | null
@@ -167,7 +167,7 @@ export const shopeeApi = {
   },
 
   // 获取店铺列表
-  getShopList: (): Promise<ShopeeShopListResponse> => {
-    return request.post('/api/v1/balance/admin/shopee/shop/list')
+  getShopList: (params?: Record<string, any>): Promise<ShopeeShopListResponse> => {
+    return request.post('/api/v1/balance/admin/shopee/shop/list', params || {})
   }
 }

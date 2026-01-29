@@ -78,7 +78,7 @@
             <el-col :xs="24" :sm="12" :md="12" :lg="6" :xl="6">
               <ShopKPICard
                 title="已结算订单金额(NT$)"
-                :value="1353636.0"
+                :value="935363611.0"
                 subtitle="已结算订单: 45"
               />
             </el-col>
@@ -127,7 +127,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, onMounted, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ShopKPICard from '../components/ShopKPICard.vue'
 import ShopRecentIncome from '../components/ShopRecentIncome.vue'
@@ -138,23 +138,42 @@ import ShopCommissionRanking from '../components/ShopCommissionRanking.vue'
 
 const route = useRoute()
 const router = useRouter()
-const shopMyStoresRef = ref<InstanceType<typeof ShopMyStores> & { fetchShopList: () => Promise<void> } | null>(null)
+const shopMyStoresRef = ref<InstanceType<typeof ShopMyStores> & { fetchShopList: (forceRefresh?: boolean) => Promise<void> } | null>(null)
+
+// 刷新店铺列表的函数
+const refreshShopList = async () => {
+  await nextTick()
+  if (shopMyStoresRef.value?.fetchShopList) {
+    console.log('触发店铺列表强制刷新')
+    // 传递 forceRefresh 参数，强制刷新并清空旧数据
+    shopMyStoresRef.value.fetchShopList(true)
+  }
+  // 清除 refresh 参数（避免重复刷新）
+  const newQuery = { ...route.query }
+  delete newQuery.refresh
+  router.replace({ query: newQuery })
+}
 
 // 监听路由参数，如果有 refresh 参数，则刷新店铺列表
 watch(() => route.query.refresh, async (refresh) => {
   if (refresh === 'true') {
-    // 等待组件挂载完成
-    await nextTick()
-    // 触发 ShopMyStores 组件刷新
-    if (shopMyStoresRef.value?.fetchShopList) {
-      shopMyStoresRef.value.fetchShopList()
-    }
-    // 清除 refresh 参数（避免重复刷新）
-    const newQuery = { ...route.query }
-    delete newQuery.refresh
-    router.replace({ query: newQuery })
+    await refreshShopList()
   }
 }, { immediate: true })
+
+// 组件挂载时检查是否需要刷新
+onMounted(() => {
+  if (route.query.refresh === 'true') {
+    refreshShopList()
+  }
+})
+
+// 组件激活时检查是否需要刷新（用于 keep-alive 场景）
+onActivated(() => {
+  if (route.query.refresh === 'true') {
+    refreshShopList()
+  }
+})
 </script>
 
 <style scoped lang="scss">
