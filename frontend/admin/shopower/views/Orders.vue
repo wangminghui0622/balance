@@ -86,14 +86,28 @@
 				<el-row :gutter="20">
 					<el-col :xs="24" :sm="8">
 						<el-form-item label="店铺名称/店铺编号">
-							<el-input v-model="filterForm.shopKeyword" placeholder="请输入店铺名称或编号" clearable
-								style="width: 100%">
-								<template #prefix>
-									<el-icon>
-										<Search />
-									</el-icon>
-								</template>
-							</el-input>
+							<el-select
+								v-model="filterForm.shopKeyword"
+								placeholder="全部"
+								clearable
+								filterable
+								style="width: 100%; border-radius: 30px;"
+								value-key="id"
+							>
+								<el-option label="全部" value="" />
+								<el-option
+                                  v-for="shop in shopOptions"
+                                  :key="shop.id"
+                                  :label="shop.name"
+                                  :value="shop.name"
+                                >
+                                  <div style="display: flex; justify-content: center; align-items: center; width: 100%;">
+                                    <span style="display: inline-block; width: 156px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align-last: justify; text-justify: distribute;">{{ shop.name }}</span>
+                                    <span style="display: inline-block; width: 30px; text-align: center;">&nbsp;|&nbsp;</span>
+                                    <span style="display: inline-block; width: 91px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: 1px; font-feature-settings: 'tnum';">{{ shop.id }}</span>
+                                  </div>
+								</el-option>
+							</el-select>
 						</el-form-item>
 					</el-col>
 					<el-col :xs="24" :sm="8">
@@ -109,21 +123,19 @@
 						</el-form-item>
 					</el-col>
 					<el-col :xs="24" :sm="8">
-						<el-form-item label="选择订单状态">
-							<el-select v-model="filterForm.orderStatus" placeholder="请选择" clearable style="width: 100%">
-								<el-option label="待发货" value="pending_shipment" />
-								<el-option label="已发货" value="shipped" />
-								<el-option label="已完成" value="completed" />
-								<el-option label="已取消" value="cancelled" />
-							</el-select>
+						<el-form-item label="日期范围">
+							<el-date-picker v-model="filterForm.dateRange" type="daterange" range-separator="至"
+								start-placeholder="开始日期" end-placeholder="结束日期" format="YYYY-MM-DD" value-format="YYYY-MM-DD"
+								style="width: 100%" />
 						</el-form-item>
 					</el-col>
 				</el-row>
 				<el-row :gutter="20" style="margin-top: 20px;">
 					<el-col :xs="24" :sm="8">
-						<el-form-item label="选择付款状态" label-class="spaced-label">
-							<el-select v-model="filterForm.paymentStatus" placeholder="请选择" clearable
-								style="width: 100%">
+						<el-form-item label="付款状态" label-class="spaced-label">
+							<el-select v-model="filterForm.paymentStatus" placeholder="请选择"
+								style="width: 35%">
+								<el-option label="全部" value="all" />
 								<el-option label="未付款" value="unpaid" />
 								<el-option label="已付款" value="paid" />
 								<el-option label="已退款" value="refunded" />
@@ -131,10 +143,14 @@
 						</el-form-item>
 					</el-col>
 					<el-col :xs="24" :sm="8">
-						<el-form-item label="日期范围">
-							<el-date-picker v-model="filterForm.dateRange" type="daterange" range-separator="至"
-								start-placeholder="开始日期" end-placeholder="结束日期" format="YYYY-MM-DD" value-format="YYYY-MM-DD"
-								style="width: 100%" />
+						<el-form-item label="订单状态">
+							<el-select v-model="filterForm.orderStatus" placeholder="请选择" style="width: 35%">
+								<el-option label="全部" value="all" />
+								<el-option label="待发货" value="待发货" />
+								<el-option label="已发货" value="已发货" />
+								<el-option label="已完成" value="已完成" />
+								<el-option label="已取消" value="已取消" />
+							</el-select>
 						</el-form-item>
 					</el-col>
 					<el-col :xs="24" :sm="8">
@@ -165,7 +181,12 @@
 					<el-button :icon="View" @click="toggleProductInfo">
 						{{ showProductInfo ? '隐藏商品信息' : '显示商品信息' }}
 					</el-button>
-					<el-button :icon="Document" @click="handleExport">导出报表</el-button>
+					<el-button @click="handleExport">
+						<svg class="export-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+							<rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5" fill="none"/>
+						</svg>
+						导出报表
+					</el-button>
 				</div>
 			</div>
 
@@ -191,16 +212,12 @@
 
 					<!-- 订单信息 -->
 					<div class="order-info">
-						<div class="info-row">
-							<span>下单时间: {{ order.orderTime }}</span>
-							<span>店铺编号: {{ order.storeId }}</span>
-						</div>
-						<div class="info-row">
-							<span>店铺名称: {{ order.storeName }}</span>
-							<span v-if="order.shopeeOrderNo">虾皮订单号: {{ order.shopeeOrderNo }}</span>
-						</div>
-						<div class="info-row" v-if="order.shopeeStatus">
-							<span>虾皮订单状态: {{ order.shopeeStatus }}</span>
+						<div class="order-info-line">
+							<span class="info-item">下单时间: {{ order.orderTime }}</span>
+							<span class="info-item">店铺编号: {{ order.storeId }}</span>
+							<span class="info-item">店铺名称: {{ order.storeName }}</span>
+							<span v-if="order.shopeeOrderNo" class="info-item">虾皮订单号: {{ order.shopeeOrderNo }}</span>
+							<span v-if="order.shopeeStatus" class="info-item info-item-right">虾皮订单状态: {{ order.shopeeStatus }}</span>
 						</div>
 					</div>
 
@@ -220,17 +237,23 @@
 							<div class="product-details">
 								<div class="product-name">{{ product.name }}</div>
 								<div class="product-specs">
-									颜色: {{ product.color || 'xxx' }} 尺寸: {{ product.size || 'xxx' }}
+									颜色: {{ product.color || 'xxx' }}&nbsp;&nbsp;&nbsp;&nbsp;尺寸: {{ product.size || 'xxx' }}
 								</div>
 								<div class="product-price-info">
 									<span>单价: NT${{ product.unitPrice }}</span>
 									<span>数量: {{ product.quantity }}</span>
 									<span>小计: {{ product.subtotal }}</span>
 								</div>
-								<div class="product-shopee-amount" v-if="product.shopeeAmount">
-									虾皮订单金额: NT${{ product.shopeeAmount }}
-								</div>
 							</div>
+						</div>
+						<!-- 虾皮订单金额显示在订单级别，多个子商品共用 -->
+						<div class="order-shopee-amount" v-if="order.shopeeAmount">
+							虾皮订单金额: NT${{ order.shopeeAmount }}
+						</div>
+						<!-- 已结算佣金和订单金额 -->
+						<div class="order-settlement-row">
+							<span>已结算佣金: NT${{ order.settledCommission || '0.00' }}</span>
+							<span>订单金额: NT${{ order.orderAmount }}</span>
 						</div>
 					</div>
 				</div>
@@ -276,28 +299,66 @@
 		orderAmount : string
 		paymentStatus ?: string
 		unsettledCommission ?: string
+		settledCommission ?: string
+		shopeeAmount ?: string
 		products ?: Product[]
 	}
 
-	const activeTab = ref('all')
-	const showProductInfo = ref(true)
+	// 响应式数据
 	const shopCount = ref(6)
+	const activeTab = ref('all')
+	const showProductInfo = ref(true) // 默认显示商品信息
 
-	const allOrdersCount = ref(245)
-	const allOrdersAmount = ref(38420)
-	const unsettledOrdersCount = ref(12)
-	const unsettledOrdersAmount = ref(456)
-	const settledOrdersCount = ref(24)
-	const settledOrdersAmount = ref(832)
-	const adjustmentOrdersCount = ref(2)
-	const adjustmentOrdersAmount = ref(60)
+	// 店铺选项数据
+	const shopOptions = ref([
+	  { name: '1号wsa旗舰阿斯店一样也', id: '908763465' },
+	  { name: 'asdga儿童中心店2号店', id: '348902785' },
+	  { name: '耐克店', id: '245123678' },
+	  { name: '台北asdgasg零结案店', id: '876543210' },
+	  { name: '16666**撒旦法66号店', id: '351223344' }
+	])
+
+	// 订单统计相关数据 - 8个独立变量
+	const allOrdersCount = ref(8)      // 全部订单数量
+	const allOrdersAmount = ref(123) // 全部订单金额
+	const unsettledOrdersCount = ref(3)  // 未结算订单数量
+	const unsettledOrdersAmount = ref(567) // 未结算订单金额
+	const settledOrdersCount = ref(5)    // 已结算订单数量
+	const settledOrdersAmount = ref(666) // 已结算订单金额
+	const adjustmentOrdersCount = ref(0) // 账款调整订单数量
+	const adjustmentOrdersAmount = ref(0) // 账款调整订单金额
+
+	// 获取默认日期范围（今天和10天前）
+	const getDefaultDateRange = (): string[] => {
+		const today = new Date()
+		const tenDaysAgo = new Date()
+		tenDaysAgo.setDate(today.getDate() - 10)
+		
+		const formatDate = (date: Date): string => {
+			const year = date.getFullYear()
+			const month = String(date.getMonth() + 1).padStart(2, '0')
+			const day = String(date.getDate()).padStart(2, '0')
+			return `${year}-${month}-${day}`
+		}
+		
+		return [formatDate(tenDaysAgo), formatDate(today)]
+	}
+
+	const dt = (daysAgo: number, time: string): string => {
+		const d = new Date()
+		d.setDate(d.getDate() - daysAgo)
+		const year = d.getFullYear()
+		const month = String(d.getMonth() + 1).padStart(2, '0')
+		const day = String(d.getDate()).padStart(2, '0')
+		return `${year}-${month}-${day} ${time}`
+	}
 
 	const filterForm = reactive({
 		shopKeyword: '',
 		orderNo: '',
-		orderStatus: '',
-		paymentStatus: '',
-		dateRange: null as string[] | null,
+		orderStatus: 'all',
+		paymentStatus: 'all',
+		dateRange: getDefaultDateRange() as string[] | null,
 	})
 
 	const pagination = reactive({
@@ -309,14 +370,15 @@
 	const orders = ref<Order[]>([
 		{
 			orderNo: 'X250904KQ2P078R',
-			orderTime: '2025-12-10 23:59:59',
-			storeId: 'S1234567890',
+			orderTime: dt(1, '23:59:59'),
+			storeId: '1234567890',
 			storeName: '示例文字占位符示例文字占位符示例文字占位符',
 			shopeeOrderNo: '250904KQ2P078R',
 			shopeeStatus: '待发货',
 			orderAmount: '36.00',
 			paymentStatus: 'paid',
 			unsettledCommission: '8.00',
+			shopeeAmount: '46.00',
 			products: [
 				{
 					image: '',
@@ -325,21 +387,21 @@
 					size: 'xxx',
 					unitPrice: '46.00',
 					quantity: 1,
-					subtotal: '46.00',
-					shopeeAmount: '46.00'
+					subtotal: '46.00'
 				}
 			]
 		},
 		{
 			orderNo: 'X250904KQ2P078S',
-			orderTime: '2025-12-10 22:30:00',
-			storeId: 'S1234567891',
+			orderTime: dt(2, '22:30:00'),
+			storeId: '1234567891',
 			storeName: '示例文字占位符示例文字占位符',
 			shopeeOrderNo: '250904KQ2P078S',
 			shopeeStatus: '待发货',
 			orderAmount: '88.00',
 			paymentStatus: 'paid',
 			unsettledCommission: '12.00',
+			shopeeAmount: '138.00',
 			products: [
 				{
 					image: '',
@@ -348,8 +410,7 @@
 					size: 'L',
 					unitPrice: '88.00',
 					quantity: 1,
-					subtotal: '88.00',
-					shopeeAmount: '88.00'
+					subtotal: '88.00'
 				},
 				{
 					image: '',
@@ -358,8 +419,128 @@
 					size: 'M',
 					unitPrice: '50.00',
 					quantity: 1,
-					subtotal: '50.00',
-					shopeeAmount: '50.00'
+					subtotal: '50.00'
+				}
+			]
+		},
+		{
+			orderNo: 'X250904KQ2P078T',
+			orderTime: dt(3, '20:15:12'),
+			storeId: '908763465',
+			storeName: '1号wsa旗舰阿斯店一样也-超长店铺名称用于测试省略号与对齐效果',
+			shopeeOrderNo: '250904KQ2P078T',
+			shopeeStatus: '已发货',
+			orderAmount: '1288.00',
+			paymentStatus: 'paid',
+			unsettledCommission: '0.00',
+			shopeeAmount: '1518.00',
+			products: [
+				{
+					image: '',
+					name: '超长商品名称用于测试省略号：这是一段很长很长的商品标题，看看是否会被截断并且不会挤压右侧金额列',
+					color: '黑色',
+					size: 'XL',
+					unitPrice: '699.00',
+					quantity: 2,
+					subtotal: '1398.00'
+				},
+				{
+					image: '',
+					name: '第二个商品（同订单多商品）',
+					color: '白色',
+					size: 'M',
+					unitPrice: '120.00',
+					quantity: 1,
+					subtotal: '120.00'
+				}
+			]
+		},
+		{
+			orderNo: 'X250904KQ2P078U',
+			orderTime: dt(4, '11:05:00'),
+			storeId: '348902785',
+			storeName: 'asdga儿童中心店2号店',
+			shopeeOrderNo: '250904KQ2P078U',
+			shopeeStatus: '已完成',
+			orderAmount: '36.00',
+			paymentStatus: 'refunded',
+			unsettledCommission: '0.00',
+			shopeeAmount: '36.00',
+			products: [
+				{
+					image: '',
+					name: '退款订单示例商品',
+					color: '绿色',
+					size: 'S',
+					unitPrice: '36.00',
+					quantity: 1,
+					subtotal: '36.00'
+				}
+			]
+		},
+		{
+			orderNo: 'X250904KQ2P078V',
+			orderTime: dt(5, '09:30:00'),
+			storeId: '245123678',
+			storeName: '耐克店',
+			shopeeOrderNo: '250904KQ2P078V',
+			shopeeStatus: '待发货',
+			orderAmount: '240.00',
+			paymentStatus: 'unpaid',
+			unsettledCommission: '24.00',
+			shopeeAmount: '240.00',
+			products: [
+				{
+					image: '',
+					name: '未付款订单-商品A',
+					color: '灰色',
+					size: '42',
+					unitPrice: '120.00',
+					quantity: 2,
+					subtotal: '240.00'
+				}
+			]
+		},
+		{
+			orderNo: 'X250904KQ2P078W',
+			orderTime: dt(6, '16:45:00'),
+			storeId: '876543210',
+			storeName: '台北asdgasg零结案店',
+			orderAmount: '520.00',
+			paymentStatus: 'paid',
+			unsettledCommission: '0.00',
+			products: [
+				{
+					image: '',
+					name: '无虾皮字段订单（用于测试缺字段时布局）',
+					color: '紫色',
+					size: 'OneSize',
+					unitPrice: '260.00',
+					quantity: 2,
+					subtotal: '520.00'
+				}
+			]
+		},
+		{
+			orderNo: 'X250904KQ2P078X',
+			orderTime: dt(7, '08:08:08'),
+			storeId: '351223344',
+			storeName: '16666**撒旦法66号店',
+			shopeeOrderNo: '250904KQ2P078X',
+			shopeeStatus: '已取消',
+			orderAmount: '99.90',
+			paymentStatus: 'paid',
+			unsettledCommission: '0.00',
+			shopeeAmount: '99.90',
+			products: [
+				{
+					image: '',
+					name: '取消订单示例商品-用于测试状态字段对齐',
+					color: '黄色',
+					size: 'L',
+					unitPrice: '99.90',
+					quantity: 1,
+					subtotal: '99.90'
 				}
 			]
 		}
@@ -403,10 +584,9 @@
 
 		// 根据筛选条件过滤
 		if (filterForm.shopKeyword) {
-			const keyword = filterForm.shopKeyword.toLowerCase()
+			const selectedShopName = filterForm.shopKeyword
 			result = result.filter(order =>
-				order.storeName.toLowerCase().includes(keyword) ||
-				order.storeId.toLowerCase().includes(keyword)
+				order.storeName.includes(selectedShopName)
 			)
 		}
 
@@ -416,11 +596,11 @@
 			)
 		}
 
-		if (filterForm.orderStatus) {
+		if (filterForm.orderStatus && filterForm.orderStatus !== 'all') {
 			result = result.filter(order => order.shopeeStatus === filterForm.orderStatus)
 		}
 
-		if (filterForm.paymentStatus) {
+		if (filterForm.paymentStatus && filterForm.paymentStatus !== 'all') {
 			result = result.filter(order => order.paymentStatus === filterForm.paymentStatus)
 		}
 
@@ -475,8 +655,8 @@
 	const handleReset = () => {
 		filterForm.shopKeyword = ''
 		filterForm.orderNo = ''
-		filterForm.orderStatus = ''
-		filterForm.paymentStatus = ''
+		filterForm.orderStatus = 'all'
+		filterForm.paymentStatus = 'all'
 		filterForm.dateRange = null
 		pagination.page = 1
 		ElMessage.info('已重置筛选条件')
@@ -660,9 +840,59 @@
 			}
 		}
 
-		:deep(.spaced-label) {
-			letter-spacing: 1.5px;
+		:deep(.el-form-item__label.spaced-label) {
+			letter-spacing: 8px !important;
 		}
+		
+		/* 强制选中项显示为与日期相同的颜色 */
+		:deep(.el-popper__wrapper .el-select__popper .el-select-dropdown__item.selected),
+		:deep(.el-popper__wrapper .el-select__popper .el-select-dropdown__item[aria-selected="true"]),
+		:deep(.el-popper__wrapper .el-select__popper .el-select-dropdown__item),
+		:deep(.el-select .el-input__inner),
+		:deep(.el-select .el-input__wrapper) {
+			color: #303133 !important;
+			font-weight: normal !important;
+		}
+		
+		/* 确保默认显示文本为与日期相同的颜色 */
+		:deep(.el-select .el-input__inner) {
+			color: #303133 !important;
+		}
+		
+		/* 所有选项使用相同颜色 */
+		:deep(.el-select span) {
+			color: #303133 !important;
+			font-weight: normal !important;
+		}
+		
+		/* 强制下拉框和输入框圆角 */
+		:deep(.el-input__wrapper),
+		:deep(.el-input__inner),
+		:deep(.el-select .el-select__wrapper) {
+			border-radius: 30px !important;
+			overflow: hidden;
+		}
+	}
+
+	/* 下拉弹出框圆角（全局样式，需要不带scoped） */
+	:global(.el-select__popper.el-popper) {
+		border-radius: 8px !important;
+		overflow: hidden;
+	}
+	
+	:global(.el-select-dropdown) {
+		border-radius: 8px !important;
+		overflow: hidden;
+	}
+	
+	:global(.el-select-dropdown__list) {
+		border-radius: 8px !important;
+	}
+	
+	/* 下拉选项内容居中 */
+	:global(.el-select-dropdown__item) {
+		text-align: center;
+		justify-content: center;
 	}
 
 	.orders-card {
@@ -686,6 +916,12 @@
 			.action-buttons {
 				display: flex;
 				gap: 12px;
+
+				.export-icon {
+					width: 16px;
+					height: 16px;
+					margin-right: 4px;
+				}
 			}
 		}
 
@@ -720,6 +956,7 @@
 					gap: 16px;
 					font-size: 14px;
 					color: #606266;
+					padding-right: 16px;
 
 					span {
 						white-space: nowrap;
@@ -729,29 +966,39 @@
 
 			.order-info {
 				margin-bottom: 16px;
+				background-color: #ebeef5;
+				border-radius: 4px;
+				padding: 10px 14px;
 
-				.info-row {
+				.order-info-line {
 					display: flex;
-					gap: 24px;
-					margin-bottom: 8px;
-					font-size: 14px;
-					color: #606266;
+					justify-content: flex-start;
+					font-size: 12px;
+					color: #909399;
+					flex-wrap: nowrap;
+					gap: 32px;
+				}
 
-					span {
-						white-space: nowrap;
-					}
+				.info-item {
+					white-space: nowrap;
+					min-width: 0;
+				}
+
+				.info-item-right {
+					margin-left: auto;
 				}
 			}
 
 			.products-section {
 				margin-top: 16px;
-				padding: 16px;
+				padding: 16px 16px 0 16px;
 				background-color: #fafafa;
 				border-radius: 6px;
 
 				.product-item {
-					display: flex;
-					gap: 16px;
+					display: grid;
+					grid-template-columns: 80px minmax(0, 1fr);
+					column-gap: 16px;
 					padding: 12px 0;
 					border-bottom: 1px solid #ebeef5;
 
@@ -785,44 +1032,73 @@
 					}
 
 					.product-details {
-						flex: 1;
-						display: flex;
-						flex-direction: column;
-						gap: 8px;
+						min-width: 0;
+						display: grid;
+						grid-template-columns: minmax(0, 1fr) 240px;
+						grid-template-rows: auto auto auto auto;
+						column-gap: 16px;
+						row-gap: 6px;
 
 						.product-name {
 							font-size: 14px;
 							color: #303133;
 							font-weight: 500;
 							line-height: 1.5;
-							word-break: break-word;
+							grid-column: 1;
+							overflow: hidden;
+							text-overflow: ellipsis;
+							white-space: nowrap;
 						}
 
 						.product-specs {
 							font-size: 12px;
 							color: #909399;
+							grid-column: 1;
 						}
 
 						.product-price-info {
 							display: flex;
-							gap: 16px;
+							gap: 24px;
 							font-size: 13px;
 							color: #606266;
-							flex-wrap: wrap;
-
-							span {
-								white-space: nowrap;
-							}
+							grid-column: 2;
+							justify-content: flex-end;
+							align-items: center;
+							white-space: nowrap;
+							padding-right: 16px;
 						}
 
 						.product-shopee-amount {
 							font-size: 13px;
 							color: #ff6a3a;
 							font-weight: 500;
-							margin-top: 4px;
+							grid-column: 2;
+							justify-self: end;
 						}
 					}
 				}
+			}
+
+			.order-shopee-amount {
+				font-size: 12px;
+				color: #909399;
+				font-weight: 400;
+				text-align: right;
+				margin-top: 0;
+				padding-top: 4px;
+				padding-right: 16px;
+				border-top: 1px solid #ebeef5;
+			}
+
+			.order-settlement-row {
+				display: flex;
+				justify-content: flex-end;
+				gap: 48px;
+				font-size: 13px;
+				color: #606266;
+				margin-top: 12px;
+				margin-bottom: -12px;
+				padding-right: 16px;
 			}
 		}
 	}
@@ -870,6 +1146,40 @@
 			flex-direction: column;
 			align-items: flex-start !important;
 			gap: 12px;
+		}
+
+		.order-info {
+			.order-info-line {
+				flex-wrap: wrap;
+				gap: 8px 16px;
+			}
+		}
+
+		.products-section {
+			padding: 12px;
+
+			.product-item {
+				grid-template-columns: 60px minmax(0, 1fr);
+
+				.product-image {
+					width: 60px;
+					height: 60px;
+				}
+
+				.product-details {
+					grid-template-columns: 1fr;
+
+					.product-price-info {
+						grid-column: 1;
+						justify-items: start;
+					}
+				}
+			}
+
+			.order-settlement-row {
+				flex-wrap: wrap;
+				gap: 8px 24px;
+			}
 		}
 	}
 </style>

@@ -141,12 +141,12 @@ const unsettledOrders = ref<Order[]>([
       name: '商品名称示例文字占位符替换即可文字占位符替换即可',
       color: 'xxx',
       size: 'xxx',
-      unitPrice: '46.00',
-      quantity: 1,
-      subtotal: '46.00'
+      unitPrice: '46789.00',
+      quantity: 1378,
+      subtotal: '4634567.00'
     },
     unsettledPayment: '8.00',
-    orderAmount: '36.00',
+    orderAmount: '36897.00',
     shopeeStatus: '待发货',
     shopeeAmount: '46.00',
     settledPayment: '16.00',

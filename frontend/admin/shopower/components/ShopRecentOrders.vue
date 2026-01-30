@@ -20,31 +20,31 @@
               </div>
             </div>
             <div class="order-info">
-              <div class="info-row">
-                <span>下单时间: {{ order.orderTime }}</span>
-              </div>
-              <div class="info-row">
-                <span>店铺编号: {{ order.storeId }}</span>
-              </div>
-              <div class="info-row">
-                <span>店铺名称: {{ order.storeName }}</span>
-              </div>
-              <div class="info-row">
-                <span>虾皮订单号: {{ order.orderNo }}</span>
+              <div class="order-info-line">
+                <span class="info-item">下单时间: {{ order.orderTime }}</span>
+                <span class="info-item">店铺编号: {{ order.storeId }}</span>
+                <span class="info-item">店铺名称: {{ order.storeName }}</span>
+                <span class="info-item">虾皮订单号: {{ order.orderNo }}</span>
+                <span v-if="order.shopeeStatus" class="info-item info-item-right">虾皮订单状态: {{ order.shopeeStatus }}</span>
               </div>
             </div>
-            <div v-if="order.product" class="product-info">
-              <el-avatar :size="60" shape="square" :src="order.product.image" />
-              <div class="product-details">
-                <div class="product-name">{{ order.product.name }}</div>
-                <div class="product-spec">
-                  颜色: {{ order.product.color }} 尺寸: {{ order.product.size }}
+            <div v-if="order.product" class="products-section">
+              <div class="product-item">
+                <el-avatar :size="80" shape="square" :src="order.product.image" class="product-image" />
+                <div class="product-details">
+                  <div class="product-name">{{ order.product.name }}</div>
+                  <div class="product-specs">颜色: {{ order.product.color }}&nbsp;&nbsp;&nbsp;&nbsp;尺寸: {{ order.product.size }}</div>
+                  <div class="product-price-info">
+                    <span>单价: NT${{ order.product.unitPrice }}</span>
+                    <span>数量: {{ order.product.quantity }}</span>
+                    <span>小计: {{ order.product.subtotal }}</span>
+                  </div>
                 </div>
-                <div class="product-price">
-                  <span>单价: NT${{ order.product.unitPrice }}</span>
-                  <span>数量: {{ order.product.quantity }}</span>
-                  <span>小计: {{ order.product.subtotal }}</span>
-                </div>
+              </div>
+              <div class="order-shopee-amount" v-if="order.shopeeAmount">虾皮订单金额: NT${{ order.shopeeAmount }}</div>
+              <div class="order-settlement-row">
+                <span>已结算佣金: NT${{ order.settledPayment || '0.00' }}</span>
+                <span>订单金额: NT${{ order.orderAmount }}</span>
               </div>
             </div>
           </div>
@@ -69,31 +69,31 @@
               </div>
             </div>
             <div class="order-info">
-              <div class="info-row">
-                <span>下单时间: {{ order.orderTime }}</span>
-              </div>
-              <div class="info-row">
-                <span>店铺编号: {{ order.storeId }}</span>
-              </div>
-              <div class="info-row">
-                <span>店铺名称: {{ order.storeName }}</span>
-              </div>
-              <div class="info-row">
-                <span>虾皮订单号: {{ order.orderNo }}</span>
+              <div class="order-info-line">
+                <span class="info-item">下单时间: {{ order.orderTime }}</span>
+                <span class="info-item">店铺编号: {{ order.storeId }}</span>
+                <span class="info-item">店铺名称: {{ order.storeName }}</span>
+                <span class="info-item">虾皮订单号: {{ order.orderNo }}</span>
+                <span v-if="order.shopeeStatus" class="info-item info-item-right">虾皮订单状态: {{ order.shopeeStatus }}</span>
               </div>
             </div>
-            <div v-if="order.product" class="product-info">
-              <el-avatar :size="60" shape="square" :src="order.product.image" />
-              <div class="product-details">
-                <div class="product-name">{{ order.product.name }}</div>
-                <div class="product-spec">
-                  颜色: {{ order.product.color }} 尺寸: {{ order.product.size }}
+            <div v-if="order.product" class="products-section">
+              <div class="product-item">
+                <el-avatar :size="80" shape="square" :src="order.product.image" class="product-image" />
+                <div class="product-details">
+                  <div class="product-name">{{ order.product.name }}</div>
+                  <div class="product-specs">颜色: {{ order.product.color }}&nbsp;&nbsp;&nbsp;&nbsp;尺寸: {{ order.product.size }}</div>
+                  <div class="product-price-info">
+                    <span>单价: NT${{ order.product.unitPrice }}</span>
+                    <span>数量: {{ order.product.quantity }}</span>
+                    <span>小计: {{ order.product.subtotal }}</span>
+                  </div>
                 </div>
-                <div class="product-price">
-                  <span>单价: NT${{ order.product.unitPrice }}</span>
-                  <span>数量: {{ order.product.quantity }}</span>
-                  <span>小计: {{ order.product.subtotal }}</span>
-                </div>
+              </div>
+              <div class="order-shopee-amount" v-if="order.shopeeAmount">虾皮订单金额: NT${{ order.shopeeAmount }}</div>
+              <div class="order-settlement-row">
+                <span>已结算佣金: NT${{ order.settledPayment || '0.00' }}</span>
+                <span>订单金额: NT${{ order.orderAmount }}</span>
               </div>
             </div>
           </div>
@@ -117,14 +117,28 @@
               </div>
             </div>
             <div class="order-info">
-              <div class="info-row">
-                <span>下单时间: {{ order.orderTime }}</span>
+              <div class="order-info-line">
+                <span class="info-item">下单时间: {{ order.orderTime }}</span>
+                <span class="info-item">店铺编号: {{ order.storeId }}</span>
+                <span class="info-item">店铺名称: {{ order.storeName }}</span>
               </div>
-              <div class="info-row">
-                <span>店铺编号: {{ order.storeId }}</span>
+            </div>
+            <div v-if="order.product" class="products-section">
+              <div class="product-item">
+                <el-avatar :size="80" shape="square" :src="order.product.image" class="product-image" />
+                <div class="product-details">
+                  <div class="product-name">{{ order.product.name }}</div>
+                  <div class="product-specs">颜色: {{ order.product.color }}&nbsp;&nbsp;&nbsp;&nbsp;尺寸: {{ order.product.size }}</div>
+                  <div class="product-price-info">
+                    <span>单价: NT${{ order.product.unitPrice }}</span>
+                    <span>数量: {{ order.product.quantity }}</span>
+                    <span>小计: {{ order.product.subtotal }}</span>
+                  </div>
+                </div>
               </div>
-              <div class="info-row">
-                <span>店铺名称: {{ order.storeName }}</span>
+              <div class="order-settlement-row">
+                <span>已结算佣金: NT${{ order.settledPayment || '0.00' }}</span>
+                <span>订单金额: NT${{ order.orderAmount }}</span>
               </div>
             </div>
           </div>
@@ -175,16 +189,16 @@ const recentOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078A',
     orderTime: '2025-12-11 10:30:00',
-    storeId: 'S1234567890',
+    storeId: '1234567890',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
       name: '商品名称示例文字占位符替换即可文字占位符替换即可',
       color: '蓝色',
       size: 'L',
-      unitPrice: '88.00',
-      quantity: 1,
-      subtotal: '88.00'
+      unitPrice: '2388.00',
+      quantity: 1231,
+      subtotal: '345688.00'
     },
     unsettledCommission: '5.00',
     orderAmount: '88.00',
@@ -197,7 +211,7 @@ const recentOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078B',
     orderTime: '2025-12-11 09:15:00',
-    storeId: 'S1234567891',
+    storeId: '1234567891',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -222,7 +236,7 @@ const unsettledOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078R',
     orderTime: '2025-12-10 23:59:59',
-    storeId: 'S1234567890',
+    storeId: '1234567890',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -246,7 +260,7 @@ const settledOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078T',
     orderTime: '2025-12-09 15:20:00',
-    storeId: 'S1234567892',
+    storeId: '1234567892',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -354,74 +368,111 @@ const settledOrders = ref<Order[]>([
   gap: 24px;
   font-size: 13px;
   color: #606266;
+  padding-right: 16px;
 }
 
 .order-info {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: #909399;
-  flex-wrap: nowrap;
-  padding-left: 14px;
-}
-
-.info-row {
-  font-size: 12px;
-  color: #909399;
-  white-space: nowrap;
-}
-
-.product-info {
-  display: flex;
-  gap: 12px;
-  padding: 12px;
-  background-color: #fff;
+  margin-bottom: 12px;
+  background-color: #ebeef5;
   border-radius: 4px;
+  padding: 10px 14px;
+
+  .order-info-line {
+    display: flex;
+    justify-content: flex-start;
+    font-size: 12px;
+    color: #909399;
+    flex-wrap: nowrap;
+    gap: 32px;
+  }
+
+  .info-item {
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .info-item-right {
+    margin-left: auto;
+  }
 }
 
-.product-details {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+.products-section {
+  padding: 16px 16px 0 16px;
+  background-color: #fafafa;
+  border-radius: 6px;
 
-.product-name {
-  font-size: 14px;
-  color: #303133;
-  line-height: 1.4;
-}
+  .product-item {
+    display: grid;
+    grid-template-columns: 80px minmax(0, 1fr);
+    column-gap: 16px;
+    padding: 12px 0;
 
-.product-spec {
-  font-size: 12px;
-  color: #909399;
-}
-
-.product-price {
-  display: flex;
-  gap: 16px;
-  font-size: 12px;
-  color: #606266;
-}
-
-.order-summary {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-top: 8px;
-  border-top: 1px solid #e4e7ed;
-}
-
-.summary-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: #606266;
-  
-  span {
-    &:first-child {
-      color: #909399;
+    .product-image {
+      width: 80px;
+      height: 80px;
+      border-radius: 6px;
+      flex-shrink: 0;
+      background-color: #f5f7fa;
     }
+
+    .product-details {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 240px;
+      column-gap: 16px;
+      row-gap: 6px;
+
+      .product-name {
+        font-size: 14px;
+        color: #303133;
+        font-weight: 500;
+        line-height: 1.5;
+        grid-column: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .product-specs {
+        font-size: 12px;
+        color: #909399;
+        grid-column: 1;
+      }
+
+      .product-price-info {
+        display: flex;
+        gap: 24px;
+        font-size: 13px;
+        color: #606266;
+        grid-column: 2;
+        justify-content: flex-end;
+        align-items: center;
+        white-space: nowrap;
+        padding-right: 16px;
+      }
+    }
+  }
+
+  .order-shopee-amount {
+    font-size: 12px;
+    color: #909399;
+    font-weight: 400;
+    text-align: right;
+    margin-top: 0;
+    padding-top: 4px;
+    padding-right: 16px;
+    border-top: 1px solid #ebeef5;
+  }
+
+  .order-settlement-row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 48px;
+    font-size: 13px;
+    color: #606266;
+    margin-top: 12px;
+    margin-bottom: -12px;
+    padding-right: 16px;
   }
 }
 </style>
