@@ -783,24 +783,20 @@
 						display: flex;
 						align-items: center;
 						justify-content: center;
-						gap: 20px;
+						gap: 16px;
 						flex-wrap: nowrap;
 
 						.count {
 							font-size: 30px;
 							font-weight: 600;
 							color: #303133;
-							position: relative;
 							white-space: nowrap;
 
 							.unit {
 								font-size: 12px;
 								font-weight: 400;
 								color: #303133;
-								position: absolute;
-								bottom: 0.6em;
-								right: -18px;
-								line-height: 1;
+								margin-left: 2px;
 							}
 						}
 
@@ -808,7 +804,6 @@
 							font-size: 18px;
 							font-weight: 400;
 							color: #606266;
-							margin: 0 4px;
 						}
 
 						.amount {
