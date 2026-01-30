@@ -35,12 +35,15 @@ const formatValue = (value: number) => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  align-items: center;
+  text-align: center;
 }
 
 .kpi-title {
   font-size: 14px;
   color: #909399;
   line-height: 1.5;
+  text-align: center;
 }
 
 .kpi-value {
@@ -48,11 +51,13 @@ const formatValue = (value: number) => {
   font-weight: bold;
   color: #303133;
   line-height: 1.2;
+  text-align: center;
 }
 
 .kpi-subtitle {
   font-size: 12px;
   color: #909399;
+  text-align: center;
 }
 </style>
 

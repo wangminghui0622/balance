@@ -78,7 +78,7 @@
             <el-col :xs="24" :sm="12" :md="12" :lg="6" :xl="6">
               <ShopKPICard
                 title="已结算订单金额(NT$)"
-                :value="935363611.0"
+                :value="9353636131.0"
                 subtitle="已结算订单: 45"
               />
             </el-col>

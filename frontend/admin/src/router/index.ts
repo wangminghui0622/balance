@@ -84,6 +84,31 @@ const routes: RouteRecordRaw[] = [
         path: 'orders',
         name: 'shopowner-orders',
         component: () => import('@shopowner/views/Orders.vue')
+      },
+      {
+        path: 'finance',
+        name: 'shopowner-finance',
+        component: () => import('@shopowner/views/Finance.vue')
+      },
+      {
+        path: 'finance/commission',
+        name: 'shopowner-finance-commission',
+        component: () => import('@shopowner/views/FinanceCommission.vue')
+      },
+      {
+        path: 'finance/prepayment',
+        name: 'shopowner-finance-prepayment',
+        component: () => import('@shopowner/views/FinancePrepayment.vue')
+      },
+      {
+        path: 'finance/deposit',
+        name: 'shopowner-finance-deposit',
+        component: () => import('@shopowner/views/FinanceDeposit.vue')
+      },
+      {
+        path: 'finance/account',
+        name: 'shopowner-finance-account',
+        component: () => import('@shopowner/views/FinanceAccount.vue')
       }
     ]
   }

@@ -33,7 +33,7 @@
                 <el-avatar :size="80" shape="square" :src="order.product.image" class="product-image" />
                 <div class="product-details">
                   <div class="product-name">{{ order.product.name }}</div>
-                  <div class="product-specs">颜色: {{ order.product.color }}&nbsp;&nbsp;&nbsp;&nbsp;尺寸: {{ order.product.size }}</div>
+                  <div class="product-specs">颜色: {{ order.product.color }} 尺寸: {{ order.product.size }}</div>
                   <div class="product-price-info">
                     <span>单价: NT${{ order.product.unitPrice }}</span>
                     <span>数量: {{ order.product.quantity }}</span>
@@ -82,7 +82,7 @@
                 <el-avatar :size="80" shape="square" :src="order.product.image" class="product-image" />
                 <div class="product-details">
                   <div class="product-name">{{ order.product.name }}</div>
-                  <div class="product-specs">颜色: {{ order.product.color }}&nbsp;&nbsp;&nbsp;&nbsp;尺寸: {{ order.product.size }}</div>
+                  <div class="product-specs">颜色: {{ order.product.color }} 尺寸: {{ order.product.size }}</div>
                   <div class="product-price-info">
                     <span>单价: NT${{ order.product.unitPrice }}</span>
                     <span>数量: {{ order.product.quantity }}</span>
@@ -128,7 +128,7 @@
                 <el-avatar :size="80" shape="square" :src="order.product.image" class="product-image" />
                 <div class="product-details">
                   <div class="product-name">{{ order.product.name }}</div>
-                  <div class="product-specs">颜色: {{ order.product.color }}&nbsp;&nbsp;&nbsp;&nbsp;尺寸: {{ order.product.size }}</div>
+                  <div class="product-specs">颜色: {{ order.product.color }} 尺寸: {{ order.product.size }}</div>
                   <div class="product-price-info">
                     <span>单价: NT${{ order.product.unitPrice }}</span>
                     <span>数量: {{ order.product.quantity }}</span>
@@ -189,7 +189,7 @@ const recentOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078A',
     orderTime: '2025-12-11 10:30:00',
-    storeId: '1234567890',
+    storeId: 'S1234567890',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -200,8 +200,8 @@ const recentOrders = ref<Order[]>([
       quantity: 1231,
       subtotal: '345688.00'
     },
-    unsettledCommission: '5.00',
-    orderAmount: '88.00',
+    unsettledCommission: '2335.00',
+    orderAmount: '88444.00',
     status: '待处理',
     unsettledPayment: '0.00',
     shopeeStatus: '待发货',
@@ -211,7 +211,7 @@ const recentOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078B',
     orderTime: '2025-12-11 09:15:00',
-    storeId: '1234567891',
+    storeId: 'S1234567891',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -236,7 +236,7 @@ const unsettledOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078R',
     orderTime: '2025-12-10 23:59:59',
-    storeId: '1234567890',
+    storeId: 'S1234567890',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -260,7 +260,7 @@ const settledOrders = ref<Order[]>([
   {
     orderNo: 'X250904KQ2P078T',
     orderTime: '2025-12-09 15:20:00',
-    storeId: '1234567892',
+    storeId: 'S1234567892',
     storeName: '店铺名称示例文字占位符文字占位符',
     product: {
       image: '',
@@ -368,7 +368,6 @@ const settledOrders = ref<Order[]>([
   gap: 24px;
   font-size: 13px;
   color: #606266;
-  padding-right: 16px;
 }
 
 .order-info {
@@ -379,7 +378,7 @@ const settledOrders = ref<Order[]>([
 
   .order-info-line {
     display: flex;
-    justify-content: flex-start;
+    justify-content: space-between;
     font-size: 12px;
     color: #909399;
     flex-wrap: nowrap;
@@ -444,11 +443,11 @@ const settledOrders = ref<Order[]>([
         gap: 24px;
         font-size: 13px;
         color: #606266;
-        grid-column: 2;
-        justify-content: flex-end;
+        grid-column: 1 / -1;
+        justify-content: flex-start;
         align-items: center;
         white-space: nowrap;
-        padding-right: 16px;
+        margin-top: 4px;
       }
     }
   }
@@ -460,7 +459,6 @@ const settledOrders = ref<Order[]>([
     text-align: right;
     margin-top: 0;
     padding-top: 4px;
-    padding-right: 16px;
     border-top: 1px solid #ebeef5;
   }
 
@@ -472,7 +470,6 @@ const settledOrders = ref<Order[]>([
     color: #606266;
     margin-top: 12px;
     margin-bottom: -12px;
-    padding-right: 16px;
   }
 }
 </style>

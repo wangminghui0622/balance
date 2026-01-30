@@ -7,7 +7,7 @@
           <h3>授权店铺BANNER</h3>
           <p>授权你的店铺,开启合作之旅。</p>
         </div>
-        <el-button type="primary" size="large" @click="handleQuickAuth">
+        <el-button type="default" size="large" class="auth-btn" @click="handleQuickAuth">
           马上授权
         </el-button>
       </div>
@@ -363,7 +363,7 @@ const handleExportReport = () => {
 
 .auth-banner {
   margin-bottom: 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #ff6a3a 0%, #ff8c5a 100%);
   border: none;
 
   :deep(.el-card__body) {
@@ -387,6 +387,18 @@ const handleExportReport = () => {
         margin: 0;
         font-size: 16px;
         opacity: 0.9;
+      }
+    }
+
+    .auth-btn {
+      border: 1px solid rgba(255, 255, 255, 0.9);
+      background: transparent;
+      color: rgba(255, 255, 255, 0.95);
+      border-radius: 6px;
+
+      &:hover {
+        border-color: rgba(255, 255, 255, 1);
+        background-color: rgba(255, 255, 255, 0.08);
       }
     }
   }
@@ -421,6 +433,35 @@ const handleExportReport = () => {
   .filter-select-small {
     width: 13ch;
   }
+
+  /* 强制下拉框和输入框圆角 */
+  :deep(.el-input__wrapper),
+  :deep(.el-input__inner),
+  :deep(.el-select .el-select__wrapper) {
+    border-radius: 30px !important;
+    overflow: hidden;
+  }
+}
+
+/* 下拉弹出框圆角（全局样式） */
+:global(.el-select__popper.el-popper) {
+  border-radius: 8px !important;
+  overflow: hidden;
+}
+
+:global(.el-select-dropdown) {
+  border-radius: 8px !important;
+  overflow: hidden;
+}
+
+:global(.el-select-dropdown__list) {
+  border-radius: 8px !important;
+}
+
+/* 下拉选项内容居中 */
+:global(.el-select-dropdown__item) {
+  text-align: center;
+  justify-content: center;
 }
 
 .stores-list-card {

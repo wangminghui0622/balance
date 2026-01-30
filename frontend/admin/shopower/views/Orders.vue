@@ -2,16 +2,6 @@
 	<div class="orders-page">
 		<div class="page-header">
 			<h1 class="page-title">我的订单</h1>
-			<div class="header-actions">
-				<el-icon class="header-icon">
-					<Search />
-				</el-icon>
-				<el-badge :value="4" class="header-icon chat-badge">
-					<el-icon>
-						<ChatDotRound />
-					</el-icon>
-				</el-badge>
-			</div>
 		</div>
 		<el-card class="summary-section-card">
 			<div class="summary-section">
@@ -275,7 +265,7 @@
 
 <script setup lang="ts">
 	import { ref, reactive, computed, onMounted } from 'vue'
-	import { Search, View, Document, Picture, ChatDotRound } from '@element-plus/icons-vue'
+	import { Search, View, Picture } from '@element-plus/icons-vue'
 	import { ElMessage } from 'element-plus'
 
 	interface Product {
@@ -780,15 +770,19 @@
 				}
 
 				.card-content {
+					text-align: center;
+
 					.card-title {
 						font-size: 14px;
 						color: #909399;
 						margin-bottom: 12px;
+						text-align: center;
 					}
 
 					.card-value {
 						display: flex;
 						align-items: center;
+						justify-content: center;
 						gap: 20px;
 						flex-wrap: nowrap;
 

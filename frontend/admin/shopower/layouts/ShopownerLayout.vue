@@ -43,7 +43,29 @@ const menuItems: MenuItem[] = [
   {
     label: '财务管理',
     path: '/shopowner/finance',
-    icon: Money
+    icon: Money,
+    children: [
+      {
+        label: '我的账单',
+        path: '/shopowner/finance'
+      },
+      {
+        label: '我的佣金',
+        path: '/shopowner/finance/commission'
+      },
+      {
+        label: '我的预付款',
+        path: '/shopowner/finance/prepayment'
+      },
+      {
+        label: '店主保证金',
+        path: '/shopowner/finance/deposit'
+      },
+      {
+        label: '收款账户',
+        path: '/shopowner/finance/account'
+      }
+    ]
   }
 ]
 </script>
