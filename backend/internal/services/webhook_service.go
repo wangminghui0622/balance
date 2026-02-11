@@ -10,6 +10,7 @@ import (
 	"balance/backend/internal/consts"
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
+	"balance/backend/internal/services/shopower"
 	"balance/backend/internal/shopee"
 
 	"gorm.io/gorm"
@@ -18,16 +19,16 @@ import (
 // WebhookService Webhook服务
 type WebhookService struct {
 	db           *gorm.DB
-	orderService *OrderService
-	shopService  *ShopService
+	orderService *shopower.OrderService
+	shopService  *shopower.ShopService
 }
 
 // NewWebhookService 创建Webhook服务
 func NewWebhookService() *WebhookService {
 	return &WebhookService{
 		db:           database.GetDB(),
-		orderService: NewOrderService(),
-		shopService:  NewShopService(),
+		orderService: shopower.NewOrderService(),
+		shopService:  shopower.NewShopService(),
 	}
 }
 
@@ -258,13 +259,13 @@ func (s *WebhookService) LogWebhook(ctx context.Context, shopID uint64, code int
 func (s *WebhookService) refreshOrderDetail(shopID uint64, orderSN string) {
 	ctx := NewBackgroundContext()
 
-	shop, err := s.shopService.GetShop(ctx, shopID)
-	if err != nil {
+	var shop models.Shop
+	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {
 		return
 	}
 
-	accessToken, err := s.shopService.GetAccessToken(ctx, shopID)
-	if err != nil {
+	var auth models.ShopAuthorization
+	if err := s.db.Where("shop_id = ?", shopID).First(&auth).Error; err != nil {
 		return
 	}
 
@@ -276,16 +277,52 @@ func (s *WebhookService) refreshOrderDetail(shopID uint64, orderSN string) {
 	}
 
 	var detailResp *shopee.OrderDetailResponse
-	err = shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
+	err := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
 		var err error
-		detailResp, err = client.GetOrderDetail(accessToken, shopID, []string{orderSN})
+		detailResp, err = client.GetOrderDetail(auth.AccessToken, shopID, []string{orderSN})
 		return err
 	})
 	if err != nil || len(detailResp.Response.OrderList) == 0 {
 		return
 	}
 
-	s.orderService.SaveOrderFromWebhook(ctx, shopID, &detailResp.Response.OrderList[0])
+	s.saveOrderFromWebhook(ctx, shopID, &detailResp.Response.OrderList[0])
+}
+
+func (s *WebhookService) saveOrderFromWebhook(ctx context.Context, shopID uint64, detail *shopee.OrderDetail) {
+	var shop models.Shop
+	s.db.Where("shop_id = ?", shopID).First(&shop)
+
+	order := models.Order{
+		ShopID:          shopID,
+		OrderSN:         detail.OrderSN,
+		Region:          shop.Region,
+		OrderStatus:     detail.OrderStatus,
+		BuyerUserID:     uint64(detail.BuyerUserID),
+		BuyerUsername:   detail.BuyerUsername,
+		Currency:        detail.Currency,
+		ShippingCarrier: detail.ShippingCarrier,
+		TrackingNumber:  detail.TrackingNo,
+	}
+
+	if detail.PayTime > 0 {
+		payTime := time.Unix(detail.PayTime, 0)
+		order.PayTime = &payTime
+	}
+	if detail.CreateTime > 0 {
+		createTime := time.Unix(detail.CreateTime, 0)
+		order.CreateTime = &createTime
+	}
+
+	var existing models.Order
+	if err := s.db.Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).First(&existing).Error; err == nil {
+		if !existing.StatusLocked {
+			order.ID = existing.ID
+			s.db.Save(&order)
+		}
+	} else {
+		s.db.Create(&order)
+	}
 }
 
 func (s *WebhookService) logError(ctx context.Context, shopID uint64, code int, errType string, err error) {

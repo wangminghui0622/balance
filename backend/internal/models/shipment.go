@@ -15,6 +15,7 @@ type Shipment struct {
 	ShipStatus      int8       `gorm:"not null;default:0;index" json:"ship_status"`
 	ShipTime        *time.Time `json:"ship_time"`
 	ErrorMessage    string     `gorm:"size:512;not null;default:''" json:"error_message"`
+	Remark          string     `gorm:"size:512;not null;default:''" json:"remark"`
 	CreatedAt       time.Time  `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt       time.Time  `gorm:"autoUpdateTime" json:"updated_at"`
 }

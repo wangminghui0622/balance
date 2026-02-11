@@ -127,8 +127,11 @@ const (
 // ==================== 路由前缀 ====================
 
 const (
-	AdminPrefix = "/api/v1/balance/admin"
-	AppPrefix   = "/api/v1/balance/app"
+	AdminPrefix    = "/api/v1/balance/admin"
+	AppPrefix      = "/api/v1/balance/app"
+	ShopowerPrefix = "/shopower"
+	OperatorPrefix = "/operator"
+	PlatformPrefix = "/platform"
 )
 
 // ==================== 路由路径 ====================
@@ -136,6 +139,8 @@ const (
 const (
 	RouteHealth = "/health"
 )
+
+// ==================== 公共认证路由 ====================
 
 const (
 	RouteAuthCallback      = "/auth/callback"
@@ -149,6 +154,72 @@ const (
 const (
 	RouteWebhook = "/webhook"
 )
+
+// ==================== 店主路由 (shopower) ====================
+
+const (
+	RouteShopowerShops            = "/shops"
+	RouteShopowerShopAuthURL      = "/shops/auth-url"
+	RouteShopowerShopCallback     = "/shops/callback"
+	RouteShopowerShopBind         = "/shops/bind"
+	RouteShopowerShopDetail       = "/shops/:shop_id"
+	RouteShopowerShopStatus       = "/shops/:shop_id/status"
+	RouteShopowerShopRefreshToken = "/shops/:shop_id/refresh-token"
+)
+
+const (
+	RouteShopowerOrders            = "/orders"
+	RouteShopowerOrderSync         = "/orders/sync"
+	RouteShopowerOrderReadyToShip  = "/orders/ready-to-ship"
+	RouteShopowerOrderDetail       = "/orders/:shop_id/:order_sn"
+	RouteShopowerOrderRefresh      = "/orders/:shop_id/:order_sn/refresh"
+	RouteShopowerOrderForceStatus  = "/orders/:shop_id/:order_sn/force-status"
+	RouteShopowerOrderUnlockStatus = "/orders/:shop_id/:order_sn/unlock"
+)
+
+const (
+	RouteShopowerShipments             = "/shipments"
+	RouteShopowerShipmentShip          = "/shipments/ship"
+	RouteShopowerShipmentBatchShip     = "/shipments/batch-ship"
+	RouteShopowerShipmentParameter     = "/shipments/shipping-parameter"
+	RouteShopowerShipmentTrackingNo    = "/shipments/tracking-number"
+	RouteShopowerShipmentDetail        = "/shipments/:shop_id/:order_sn"
+	RouteShopowerShipmentSyncLogistics = "/shipments/sync-logistics/:shop_id"
+	RouteShopowerShipmentLogistics     = "/shipments/logistics/:shop_id"
+)
+
+// ==================== 运营路由 (operator) ====================
+
+const (
+	RouteOperatorShops      = "/shops"
+	RouteOperatorShopDetail = "/shops/:shop_id"
+)
+
+const (
+	RouteOperatorOrders      = "/orders"
+	RouteOperatorOrderDetail = "/orders/:shop_id/:order_sn"
+)
+
+// ==================== 平台路由 (platform) ====================
+
+const (
+	RoutePlatformUsers      = "/users"
+	RoutePlatformUserDetail = "/users/:user_id"
+	RoutePlatformUserStatus = "/users/:user_id/status"
+)
+
+const (
+	RoutePlatformShops      = "/shops"
+	RoutePlatformShopDetail = "/shops/:shop_id"
+	RoutePlatformShopStatus = "/shops/:shop_id/status"
+)
+
+const (
+	RoutePlatformOrders      = "/orders"
+	RoutePlatformOrderDetail = "/orders/:shop_id/:order_sn"
+)
+
+// ==================== 兼容旧路由（逐步废弃） ====================
 
 const (
 	RouteShops            = "/shops"

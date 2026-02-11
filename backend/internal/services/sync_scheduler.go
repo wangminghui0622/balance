@@ -7,14 +7,16 @@ import (
 	"sync"
 	"time"
 
+	"balance/backend/internal/services/shopower"
+
 	"gorm.io/gorm"
 )
 
 // SyncScheduler 同步调度器
 type SyncScheduler struct {
 	db           *gorm.DB
-	orderService *OrderService
-	shopService  *ShopService
+	orderService *shopower.OrderService
+	shopService  *shopower.ShopService
 	interval     time.Duration
 	stopChan     chan struct{}
 	wg           sync.WaitGroup
@@ -23,11 +25,11 @@ type SyncScheduler struct {
 }
 
 // NewSyncScheduler 创建同步调度器
-func NewSyncScheduler(db *gorm.DB, orderService *OrderService, shopService *ShopService) *SyncScheduler {
+func NewSyncScheduler(db *gorm.DB) *SyncScheduler {
 	return &SyncScheduler{
 		db:           db,
-		orderService: orderService,
-		shopService:  shopService,
+		orderService: shopower.NewOrderService(),
+		shopService:  shopower.NewShopService(),
 		interval:     30 * time.Minute,
 		stopChan:     make(chan struct{}),
 	}
@@ -110,7 +112,7 @@ func (s *SyncScheduler) syncAllShops() {
 		timeTo := time.Now()
 		timeFrom := timeTo.Add(-7 * 24 * time.Hour)
 
-		if err := s.orderService.SyncOrders(ctx, shop.ShopID, timeFrom, timeTo, ""); err != nil {
+		if _, err := s.orderService.SyncOrders(ctx, 0, int64(shop.ShopID), timeFrom, timeTo); err != nil {
 			log.Printf("[SyncScheduler] 店铺 %d (%s) 同步失败: %v", shop.ShopID, shop.ShopName, err)
 			failCount++
 		} else {
@@ -133,7 +135,7 @@ func (s *SyncScheduler) SyncShopOrders(shopID uint64) error {
 	timeTo := time.Now()
 	timeFrom := timeTo.Add(-30 * 24 * time.Hour)
 
-	if err := s.orderService.SyncOrders(ctx, shopID, timeFrom, timeTo, ""); err != nil {
+	if _, err := s.orderService.SyncOrders(ctx, 0, int64(shopID), timeFrom, timeTo); err != nil {
 		return fmt.Errorf("同步店铺 %d 订单失败: %w", shopID, err)
 	}
 

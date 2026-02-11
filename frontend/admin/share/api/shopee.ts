@@ -120,16 +120,21 @@ export interface ShopeeShopListResponse {
   }
 }
 
+// API前缀常量
+const SHOPOWER_PREFIX = '/api/v1/balance/admin/shopower'
+const OPERATOR_PREFIX = '/api/v1/balance/admin/operator'
+const PLATFORM_PREFIX = '/api/v1/balance/admin/platform'
+
 export const shopeeApi = {
   // 获取配置
   getAuthConfig: (): Promise<ShopeeAuthConfigResponse> => {
     return request.post('/api/v1/balance/admin/shopee/auth/cfg')
   },
 
-  // 获取授权 URL
+  // 获取授权 URL（店主专用）
   getAuthURL: (region?: string): Promise<ShopeeAuthURLResponse> => {
     return request
-      .get('/api/v1/balance/admin/shops/auth-url', {
+      .get(`${SHOPOWER_PREFIX}/shops/auth-url`, {
         params: region ? { region } : undefined
       })
       .then((res: any) => {
@@ -172,10 +177,56 @@ export const shopeeApi = {
     })
   },
 
-  // 获取店铺列表
+  // 获取店铺列表（店主专用）
   getShopList: (params?: Record<string, any>): Promise<ShopeeShopListResponse> => {
     return request
-      .get('/api/v1/balance/admin/shops', {
+      .get(`${SHOPOWER_PREFIX}/shops`, {
+        params: params || {}
+      })
+      .then((res: any) => {
+        return {
+          code: res?.code ?? 500,
+          message: res?.message || '',
+          data: {
+            list: res?.data?.list || [],
+            total: res?.data?.total || 0,
+            page: res?.data?.page || 1,
+            page_size: res?.data?.page_size || 10
+          }
+        } as ShopeeShopListResponse
+      })
+  }
+}
+
+// 运营专用API
+export const operatorShopeeApi = {
+  // 获取店铺列表（运营可查看所有店铺）
+  getShopList: (params?: Record<string, any>): Promise<ShopeeShopListResponse> => {
+    return request
+      .get(`${OPERATOR_PREFIX}/shops`, {
+        params: params || {}
+      })
+      .then((res: any) => {
+        return {
+          code: res?.code ?? 500,
+          message: res?.message || '',
+          data: {
+            list: res?.data?.list || [],
+            total: res?.data?.total || 0,
+            page: res?.data?.page || 1,
+            page_size: res?.data?.page_size || 10
+          }
+        } as ShopeeShopListResponse
+      })
+  }
+}
+
+// 平台专用API
+export const platformShopeeApi = {
+  // 获取店铺列表（平台可查看所有店铺）
+  getShopList: (params?: Record<string, any>): Promise<ShopeeShopListResponse> => {
+    return request
+      .get(`${PLATFORM_PREFIX}/shops`, {
         params: params || {}
       })
       .then((res: any) => {

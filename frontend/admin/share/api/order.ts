@@ -1,5 +1,10 @@
 import request from '../utils/request'
 
+// API前缀常量
+const SHOPOWER_PREFIX = '/api/v1/balance/admin/shopower'
+const OPERATOR_PREFIX = '/api/v1/balance/admin/operator'
+const PLATFORM_PREFIX = '/api/v1/balance/admin/platform'
+
 // 订单商品
 export interface OrderItem {
   id: number
@@ -118,10 +123,11 @@ export interface OrderListParams {
   page_size?: number
 }
 
+// 店主专用订单API
 export const orderApi = {
   // 获取订单列表
   getOrderList: (params?: OrderListParams): Promise<OrderListResponse> => {
-    return request.get('/api/v1/balance/admin/orders', { params })
+    return request.get(`${SHOPOWER_PREFIX}/orders`, { params })
       .then((res: any) => ({
         code: res?.code ?? 500,
         message: res?.message || '',
@@ -131,7 +137,7 @@ export const orderApi = {
 
   // 获取订单详情
   getOrderDetail: (shopId: number, orderSn: string): Promise<OrderDetailResponse> => {
-    return request.get(`/api/v1/balance/admin/orders/${shopId}/${orderSn}`)
+    return request.get(`${SHOPOWER_PREFIX}/orders/${shopId}/${orderSn}`)
       .then((res: any) => ({
         code: res?.code ?? 500,
         message: res?.message || '',
@@ -141,7 +147,7 @@ export const orderApi = {
 
   // 获取待发货订单
   getReadyToShipOrders: (params?: { shop_id?: number; page?: number; page_size?: number }): Promise<OrderListResponse> => {
-    return request.get('/api/v1/balance/admin/orders/ready-to-ship', { params })
+    return request.get(`${SHOPOWER_PREFIX}/orders/ready-to-ship`, { params })
       .then((res: any) => ({
         code: res?.code ?? 500,
         message: res?.message || '',
@@ -151,7 +157,7 @@ export const orderApi = {
 
   // 同步订单
   syncOrders: (data: SyncOrdersRequest): Promise<SyncOrdersResponse> => {
-    return request.post('/api/v1/balance/admin/orders/sync', data)
+    return request.post(`${SHOPOWER_PREFIX}/orders/sync`, data)
       .then((res: any) => ({
         code: res?.code ?? 500,
         message: res?.message || '',
@@ -161,7 +167,53 @@ export const orderApi = {
 
   // 刷新单个订单
   refreshOrder: (shopId: number, orderSn: string): Promise<OrderDetailResponse> => {
-    return request.post(`/api/v1/balance/admin/orders/${shopId}/${orderSn}/refresh`)
+    return request.post(`${SHOPOWER_PREFIX}/orders/${shopId}/${orderSn}/refresh`)
+      .then((res: any) => ({
+        code: res?.code ?? 500,
+        message: res?.message || '',
+        data: res?.data
+      } as OrderDetailResponse))
+  }
+}
+
+// 运营专用订单API
+export const operatorOrderApi = {
+  // 获取订单列表（运营可查看所有订单）
+  getOrderList: (params?: OrderListParams): Promise<OrderListResponse> => {
+    return request.get(`${OPERATOR_PREFIX}/orders`, { params })
+      .then((res: any) => ({
+        code: res?.code ?? 500,
+        message: res?.message || '',
+        data: res?.data || { list: [], total: 0, page: 1, page_size: 10 }
+      } as OrderListResponse))
+  },
+
+  // 获取订单详情
+  getOrderDetail: (shopId: number, orderSn: string): Promise<OrderDetailResponse> => {
+    return request.get(`${OPERATOR_PREFIX}/orders/${shopId}/${orderSn}`)
+      .then((res: any) => ({
+        code: res?.code ?? 500,
+        message: res?.message || '',
+        data: res?.data
+      } as OrderDetailResponse))
+  }
+}
+
+// 平台专用订单API
+export const platformOrderApi = {
+  // 获取订单列表（平台可查看所有订单）
+  getOrderList: (params?: OrderListParams): Promise<OrderListResponse> => {
+    return request.get(`${PLATFORM_PREFIX}/orders`, { params })
+      .then((res: any) => ({
+        code: res?.code ?? 500,
+        message: res?.message || '',
+        data: res?.data || { list: [], total: 0, page: 1, page_size: 10 }
+      } as OrderListResponse))
+  },
+
+  // 获取订单详情
+  getOrderDetail: (shopId: number, orderSn: string): Promise<OrderDetailResponse> => {
+    return request.get(`${PLATFORM_PREFIX}/orders/${shopId}/${orderSn}`)
       .then((res: any) => ({
         code: res?.code ?? 500,
         message: res?.message || '',

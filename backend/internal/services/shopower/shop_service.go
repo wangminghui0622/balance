@@ -1,4 +1,4 @@
-package services
+package shopower
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// ShopService 店铺服务
+// ShopService 店铺服务（店主专用）
 type ShopService struct {
 	db *gorm.DB
 }
@@ -27,32 +27,31 @@ func NewShopService() *ShopService {
 	}
 }
 
-// GetAuthURL 获取授权链接（带用户ID）
-func (s *ShopService) GetAuthURL(region string, adminID int64) string {
-	client := shopee.NewClient(region)
-	redirectURL := config.Get().Shopee.RedirectURL
+// GetAuthURL 获取授权链接
+func (s *ShopService) GetAuthURL(ctx context.Context, adminID int64) (string, error) {
+	cfg := config.Get().Shopee
+	client := shopee.NewClient("SG") // 默认使用SG区域
 	state := fmt.Sprintf("%d", adminID)
-	return client.GetAuthURL(redirectURL, state)
+	return client.GetAuthURL(cfg.RedirectURL, state), nil
 }
 
 // HandleAuthCallback 处理授权回调
-func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopID uint64, region string, adminID int64) error {
-	client := shopee.NewClient(region)
+func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopID int64, adminID int64) error {
 	cfg := config.Get().Shopee
+	client := shopee.NewClient("SG") // 默认使用SG区域
 
-	tokenResp, err := client.GetAccessToken(code, shopID)
+	tokenResp, err := client.GetAccessToken(code, uint64(shopID))
 	if err != nil {
 		return fmt.Errorf("获取Token失败: %w", err)
 	}
 
-	shopInfo, err := client.GetShopInfo(tokenResp.AccessToken, shopID)
+	shopInfo, err := client.GetShopInfo(tokenResp.AccessToken, uint64(shopID))
 	if err != nil {
 		return fmt.Errorf("获取店铺信息失败: %w", err)
 	}
 
 	now := time.Now()
 	expiresAt := now.Add(time.Duration(tokenResp.ExpireIn) * time.Second)
-
 	var refreshExpiresAt time.Time
 	if shopInfo.ExpireTime > 0 {
 		refreshExpiresAt = time.Unix(shopInfo.ExpireTime, 0)
@@ -85,7 +84,7 @@ func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopI
 			}
 		} else if err == gorm.ErrRecordNotFound {
 			shop := models.Shop{
-				ShopID:           shopID,
+				ShopID:           uint64(shopID),
 				ShopIDStr:        fmt.Sprintf("%d", shopID),
 				AdminID:          adminID,
 				ShopName:         shopInfo.Response.ShopName,
@@ -98,10 +97,6 @@ func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopI
 				Currency:         getCurrencyByRegion(shopInfo.Response.Region),
 				AutoSync:         true,
 				SyncInterval:     3600,
-				SyncItems:        true,
-				SyncOrders:       true,
-				SyncLogistics:    true,
-				SyncFinance:      true,
 			}
 			if err := tx.Create(&shop).Error; err != nil {
 				return fmt.Errorf("创建店铺失败: %w", err)
@@ -111,62 +106,58 @@ func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopI
 		}
 
 		auth := models.ShopAuthorization{
-			ShopID:           shopID,
+			ShopID:           uint64(shopID),
 			AccessToken:      tokenResp.AccessToken,
 			RefreshToken:     tokenResp.RefreshToken,
-			TokenType:        "Bearer",
 			ExpiresAt:        expiresAt,
 			RefreshExpiresAt: refreshExpiresAt,
 		}
 
-		if err := tx.Where("shop_id = ?", shopID).Assign(auth).FirstOrCreate(&auth).Error; err != nil {
-			return fmt.Errorf("保存授权信息失败: %w", err)
+		var existingAuth models.ShopAuthorization
+		if err := tx.Where("shop_id = ?", shopID).First(&existingAuth).Error; err == nil {
+			auth.ID = existingAuth.ID
+			if err := tx.Save(&auth).Error; err != nil {
+				return fmt.Errorf("更新授权信息失败: %w", err)
+			}
+		} else {
+			if err := tx.Create(&auth).Error; err != nil {
+				return fmt.Errorf("创建授权信息失败: %w", err)
+			}
 		}
 
-		if err := s.cacheToken(ctx, shopID, tokenResp.AccessToken, tokenResp.RefreshToken, expiresAt); err != nil {
-			fmt.Printf("缓存Token失败: %v\n", err)
-		}
-
+		s.cacheToken(ctx, uint64(shopID), tokenResp.AccessToken, tokenResp.RefreshToken, expiresAt)
 		return nil
 	})
 }
 
+func (s *ShopService) cacheToken(ctx context.Context, shopID uint64, accessToken, refreshToken string, expiresAt time.Time) {
+	rdb := database.GetRedis()
+	key := fmt.Sprintf(consts.KeyShopToken, shopID)
+	data, _ := json.Marshal(map[string]interface{}{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"expires_at":    expiresAt.Unix(),
+	})
+	rdb.Set(ctx, key, data, time.Until(expiresAt))
+}
+
 func getCurrencyByRegion(region string) string {
-	currencyMap := map[string]string{
-		"SG": "SGD", "MY": "MYR", "TH": "THB", "TW": "TWD",
-		"VN": "VND", "PH": "PHP", "ID": "IDR", "BR": "BRL",
-		"MX": "MXN", "CO": "COP", "CL": "CLP",
+	currencies := map[string]string{
+		"TW": "TWD", "SG": "SGD", "MY": "MYR", "TH": "THB",
+		"ID": "IDR", "VN": "VND", "PH": "PHP", "BR": "BRL",
 	}
-	if currency, ok := currencyMap[region]; ok {
-		return currency
+	if c, ok := currencies[region]; ok {
+		return c
 	}
 	return "USD"
 }
 
-func (s *ShopService) cacheToken(ctx context.Context, shopID uint64, accessToken, refreshToken string, expiresAt time.Time) error {
-	rdb := database.GetRedis()
-	key := fmt.Sprintf(consts.KeyShopToken, shopID)
-
-	data := map[string]interface{}{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"expires_at":    expiresAt.Unix(),
-	}
-
-	jsonData, _ := json.Marshal(data)
-	ttl := time.Until(expiresAt) - consts.TokenExpireBuffer
-	if ttl <= 0 {
-		ttl = time.Minute
-	}
-
-	return rdb.Set(ctx, key, jsonData, ttl).Err()
-}
-
-// GetAccessToken 获取店铺访问令牌
+// GetAccessToken 获取店铺访问令牌（带缓存）
 func (s *ShopService) GetAccessToken(ctx context.Context, shopID uint64) (string, error) {
 	rdb := database.GetRedis()
 	key := fmt.Sprintf(consts.KeyShopToken, shopID)
 
+	// 尝试从缓存获取
 	data, err := rdb.Get(ctx, key).Result()
 	if err == nil {
 		var tokenData map[string]interface{}
@@ -177,11 +168,13 @@ func (s *ShopService) GetAccessToken(ctx context.Context, shopID uint64) (string
 		}
 	}
 
+	// 从数据库获取
 	var auth models.ShopAuthorization
 	if err := s.db.Where("shop_id = ?", shopID).First(&auth).Error; err != nil {
 		return "", fmt.Errorf("店铺未授权: %w", err)
 	}
 
+	// 检查是否过期，需要刷新
 	if auth.IsAccessTokenExpired() {
 		if err := s.RefreshToken(ctx, shopID); err != nil {
 			return "", err
@@ -191,9 +184,8 @@ func (s *ShopService) GetAccessToken(ctx context.Context, shopID uint64) (string
 		}
 	}
 
-	if err := s.cacheToken(ctx, shopID, auth.AccessToken, auth.RefreshToken, auth.ExpiresAt); err != nil {
-		fmt.Printf("缓存Token失败: %v\n", err)
-	}
+	// 缓存Token
+	s.cacheToken(ctx, shopID, auth.AccessToken, auth.RefreshToken, auth.ExpiresAt)
 
 	return auth.AccessToken, nil
 }
@@ -237,27 +229,33 @@ func (s *ShopService) RefreshToken(ctx context.Context, shopID uint64) error {
 		return fmt.Errorf("保存Token失败: %w", err)
 	}
 
-	if err := s.cacheToken(ctx, shopID, tokenResp.AccessToken, tokenResp.RefreshToken, expiresAt); err != nil {
-		fmt.Printf("缓存Token失败: %v\n", err)
-	}
-
+	s.cacheToken(ctx, shopID, tokenResp.AccessToken, tokenResp.RefreshToken, expiresAt)
 	return nil
 }
 
-// ListShops 获取店铺列表
-func (s *ShopService) ListShops(ctx context.Context, page, pageSize int, status *int8, adminID int64) ([]models.ShopWithAuth, int64, error) {
+// GetAuthorizedShops 获取所有已授权的店铺
+func (s *ShopService) GetAuthorizedShops() ([]models.Shop, error) {
+	var shops []models.Shop
+	err := s.db.Where("auth_status = ?", 1).Find(&shops).Error
+	return shops, err
+}
+
+// UpdateLastSyncTime 更新店铺最后同步时间
+func (s *ShopService) UpdateLastSyncTime(shopID uint64) error {
+	now := time.Now()
+	nextSync := now.Add(30 * time.Minute)
+	return s.db.Model(&models.Shop{}).Where("shop_id = ?", shopID).Updates(map[string]interface{}{
+		"last_sync_at": now,
+		"next_sync_at": nextSync,
+	}).Error
+}
+
+// ListShops 获取店铺列表（只能查看自己的店铺）
+func (s *ShopService) ListShops(ctx context.Context, adminID int64, page, pageSize int) ([]models.ShopWithAuth, int64, error) {
 	var shops []models.Shop
 	var total int64
 
-	query := s.db.Model(&models.Shop{})
-
-	if adminID > 0 {
-		query = query.Where("admin_id = ?", adminID)
-	}
-
-	if status != nil {
-		query = query.Where("status = ?", *status)
-	}
+	query := s.db.Model(&models.Shop{}).Where("admin_id = ?", adminID)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -280,8 +278,7 @@ func (s *ShopService) ListShops(ctx context.Context, page, pageSize int, status 
 
 	authMap := make(map[uint64]*models.ShopAuthorization)
 	for i := range auths {
-		auth := &auths[i]
-		authMap[auth.ShopID] = auth
+		authMap[auths[i].ShopID] = &auths[i]
 	}
 
 	result := make([]models.ShopWithAuth, len(shops))
@@ -290,13 +287,10 @@ func (s *ShopService) ListShops(ctx context.Context, page, pageSize int, status 
 		if shop.ShopIDStr == "" {
 			shop.ShopIDStr = fmt.Sprintf("%d", shop.ShopID)
 		}
-
 		result[i] = models.ShopWithAuth{Shop: *shop}
-
 		if auth, ok := authMap[shop.ShopID]; ok {
 			result[i].AuthTime = &auth.CreatedAt
 			result[i].ExpireTime = &auth.RefreshExpiresAt
-
 			if auth.AccessToken != "" && !auth.IsAccessTokenExpired() {
 				result[i].AuthStatus = 1
 			} else if auth.RefreshToken != "" && !auth.IsRefreshTokenExpired() {
@@ -304,64 +298,52 @@ func (s *ShopService) ListShops(ctx context.Context, page, pageSize int, status 
 			} else {
 				result[i].AuthStatus = 2
 			}
-		} else {
-			result[i].AuthStatus = 0
 		}
 	}
 
 	return result, total, nil
 }
 
-// GetShop 获取店铺详情
-func (s *ShopService) GetShop(ctx context.Context, shopID uint64) (*models.Shop, error) {
+// GetShop 获取店铺详情（验证归属权）
+func (s *ShopService) GetShop(ctx context.Context, adminID int64, shopID int64) (*models.Shop, error) {
 	var shop models.Shop
-	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {
-		return nil, err
+	if err := s.db.Where("shop_id = ? AND admin_id = ?", shopID, adminID).First(&shop).Error; err != nil {
+		return nil, fmt.Errorf("店铺不存在或无权限访问")
 	}
 	return &shop, nil
 }
 
-// UpdateShopStatus 更新店铺状态
-func (s *ShopService) UpdateShopStatus(ctx context.Context, shopID uint64, status int8) error {
-	return s.db.Model(&models.Shop{}).Where("shop_id = ?", shopID).Update("status", status).Error
-}
-
-// DeleteShop 删除店铺
-func (s *ShopService) DeleteShop(ctx context.Context, shopID uint64) error {
-	return s.UpdateShopStatus(ctx, shopID, consts.ShopStatusDisabled)
-}
-
-// BindShopToAdmin 将店铺绑定到用户
-func (s *ShopService) BindShopToAdmin(ctx context.Context, shopID uint64, adminID int64) error {
+// BindShop 绑定店铺
+func (s *ShopService) BindShop(ctx context.Context, adminID int64, shopID int64) error {
 	var shop models.Shop
 	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {
-		return fmt.Errorf("店铺不存在: %w", err)
+		return fmt.Errorf("店铺不存在")
 	}
-
 	if shop.AdminID > 0 && shop.AdminID != adminID {
 		return fmt.Errorf("该店铺已被其他用户绑定")
 	}
-
-	if shop.AdminID == adminID {
-		return nil
-	}
-
 	return s.db.Model(&shop).Update("admin_id", adminID).Error
 }
 
-// GetAuthorizedShops 获取所有已授权的店铺
-func (s *ShopService) GetAuthorizedShops() ([]models.Shop, error) {
-	var shops []models.Shop
-	err := s.db.Where("auth_status = ?", 1).Find(&shops).Error
-	return shops, err
+// UpdateShopStatus 更新店铺状态
+func (s *ShopService) UpdateShopStatus(ctx context.Context, adminID int64, shopID int64, status int) error {
+	result := s.db.Model(&models.Shop{}).Where("shop_id = ? AND admin_id = ?", shopID, adminID).Update("status", status)
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("店铺不存在或无权限操作")
+	}
+	return result.Error
 }
 
-// UpdateLastSyncTime 更新店铺最后同步时间
-func (s *ShopService) UpdateLastSyncTime(shopID uint64) error {
-	now := time.Now()
-	nextSync := now.Add(30 * time.Minute)
-	return s.db.Model(&models.Shop{}).Where("shop_id = ?", shopID).Updates(map[string]interface{}{
-		"last_sync_at": now,
-		"next_sync_at": nextSync,
-	}).Error
+// DeleteShop 删除店铺
+func (s *ShopService) DeleteShop(ctx context.Context, adminID int64, shopID int64) error {
+	return s.UpdateShopStatus(ctx, adminID, shopID, consts.ShopStatusDisabled)
+}
+
+// RefreshShopToken 刷新店铺Token
+func (s *ShopService) RefreshShopToken(ctx context.Context, adminID int64, shopID int64) error {
+	var shop models.Shop
+	if err := s.db.Where("shop_id = ? AND admin_id = ?", shopID, adminID).First(&shop).Error; err != nil {
+		return fmt.Errorf("店铺不存在或无权限操作")
+	}
+	return s.RefreshToken(ctx, uint64(shopID))
 }

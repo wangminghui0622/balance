@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"balance/backend/internal/services"
+	"balance/backend/internal/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -25,16 +26,16 @@ func NewShipmentHandler() *ShipmentHandler {
 func (h *ShipmentHandler) ShipOrder(c *gin.Context) {
 	var req services.ShipOrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		BadRequest(c, "参数错误: "+err.Error())
+		utils.BadRequest(c, "参数错误: "+err.Error())
 		return
 	}
 
 	if err := h.shipmentService.ShipOrder(c.Request.Context(), &req); err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, gin.H{"message": "发货成功"})
+	utils.Success(c, gin.H{"message": "发货成功"})
 }
 
 // BatchShipRequest 批量发货请求
@@ -47,12 +48,12 @@ type BatchShipRequest struct {
 func (h *ShipmentHandler) BatchShipOrders(c *gin.Context) {
 	var req BatchShipRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		BadRequest(c, "参数错误: "+err.Error())
+		utils.BadRequest(c, "参数错误: "+err.Error())
 		return
 	}
 
 	results := h.shipmentService.BatchShipOrders(c.Request.Context(), req.Orders)
-	Success(c, results)
+	utils.Success(c, results)
 }
 
 // GetShippingParameter 获取发货参数
@@ -60,23 +61,23 @@ func (h *ShipmentHandler) BatchShipOrders(c *gin.Context) {
 func (h *ShipmentHandler) GetShippingParameter(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Query("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	orderSN := c.Query("order_sn")
 	if orderSN == "" {
-		BadRequest(c, "订单号不能为空")
+		utils.BadRequest(c, "订单号不能为空")
 		return
 	}
 
 	result, err := h.shipmentService.GetShippingParameter(c.Request.Context(), shopID, orderSN)
 	if err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, result.Response)
+	utils.Success(c, result.Response)
 }
 
 // GetTrackingNumber 获取运单号
@@ -84,23 +85,23 @@ func (h *ShipmentHandler) GetShippingParameter(c *gin.Context) {
 func (h *ShipmentHandler) GetTrackingNumber(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Query("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	orderSN := c.Query("order_sn")
 	if orderSN == "" {
-		BadRequest(c, "订单号不能为空")
+		utils.BadRequest(c, "订单号不能为空")
 		return
 	}
 
 	result, err := h.shipmentService.GetTrackingNumber(c.Request.Context(), shopID, orderSN)
 	if err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, result.Response)
+	utils.Success(c, result.Response)
 }
 
 // GetShipment 获取发货记录
@@ -108,23 +109,23 @@ func (h *ShipmentHandler) GetTrackingNumber(c *gin.Context) {
 func (h *ShipmentHandler) GetShipment(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	orderSN := c.Param("order_sn")
 	if orderSN == "" {
-		BadRequest(c, "订单号不能为空")
+		utils.BadRequest(c, "订单号不能为空")
 		return
 	}
 
 	shipment, err := h.shipmentService.GetShipment(c.Request.Context(), shopID, orderSN)
 	if err != nil {
-		NotFound(c, "发货记录不存在")
+		utils.NotFound(c, "发货记录不存在")
 		return
 	}
 
-	Success(c, shipment)
+	utils.Success(c, shipment)
 }
 
 // ListShipments 获取发货记录列表
@@ -150,11 +151,11 @@ func (h *ShipmentHandler) ListShipments(c *gin.Context) {
 
 	shipments, total, err := h.shipmentService.ListShipments(c.Request.Context(), shopID, status, page, pageSize)
 	if err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	SuccessWithPage(c, shipments, total, page, pageSize)
+	utils.SuccessWithPage(c, shipments, total, page, pageSize)
 }
 
 // SyncLogisticsChannels 同步物流渠道
@@ -162,16 +163,16 @@ func (h *ShipmentHandler) ListShipments(c *gin.Context) {
 func (h *ShipmentHandler) SyncLogisticsChannels(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	if err := h.shipmentService.SyncLogisticsChannels(c.Request.Context(), shopID); err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, gin.H{"message": "同步成功"})
+	utils.Success(c, gin.H{"message": "同步成功"})
 }
 
 // GetLogisticsChannels 获取物流渠道列表
@@ -179,15 +180,15 @@ func (h *ShipmentHandler) SyncLogisticsChannels(c *gin.Context) {
 func (h *ShipmentHandler) GetLogisticsChannels(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	channels, err := h.shipmentService.GetLogisticsChannels(c.Request.Context(), shopID)
 	if err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, channels)
+	utils.Success(c, channels)
 }

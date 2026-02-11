@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"balance/backend/internal/services"
+	"balance/backend/internal/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -34,7 +35,7 @@ type SyncOrdersRequest struct {
 func (h *OrderHandler) SyncOrders(c *gin.Context) {
 	var req SyncOrdersRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		BadRequest(c, "参数错误")
+		utils.BadRequest(c, "参数错误")
 		return
 	}
 
@@ -51,11 +52,11 @@ func (h *OrderHandler) SyncOrders(c *gin.Context) {
 	}
 
 	if err := h.orderService.SyncOrders(c.Request.Context(), req.ShopID, timeFrom, timeTo, req.OrderStatus); err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, gin.H{"message": "同步完成"})
+	utils.Success(c, gin.H{"message": "同步完成"})
 }
 
 // ListOrders 获取订单列表
@@ -96,11 +97,11 @@ func (h *OrderHandler) ListOrders(c *gin.Context) {
 
 	orders, total, err := h.orderService.ListOrders(c.Request.Context(), params)
 	if err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	SuccessWithPage(c, orders, total, page, pageSize)
+	utils.SuccessWithPage(c, orders, total, page, pageSize)
 }
 
 // GetOrder 获取订单详情
@@ -108,23 +109,23 @@ func (h *OrderHandler) ListOrders(c *gin.Context) {
 func (h *OrderHandler) GetOrder(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	orderSN := c.Param("order_sn")
 	if orderSN == "" {
-		BadRequest(c, "订单号不能为空")
+		utils.BadRequest(c, "订单号不能为空")
 		return
 	}
 
 	order, err := h.orderService.GetOrder(c.Request.Context(), shopID, orderSN)
 	if err != nil {
-		NotFound(c, "订单不存在")
+		utils.NotFound(c, "订单不存在")
 		return
 	}
 
-	Success(c, order)
+	utils.Success(c, order)
 }
 
 // GetReadyToShipOrders 获取待发货订单
@@ -150,11 +151,11 @@ func (h *OrderHandler) GetReadyToShipOrders(c *gin.Context) {
 
 	orders, total, err := h.orderService.GetReadyToShipOrders(c.Request.Context(), shopID, page, pageSize, userID)
 	if err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	SuccessWithPage(c, orders, total, page, pageSize)
+	utils.SuccessWithPage(c, orders, total, page, pageSize)
 }
 
 // RefreshOrder 刷新单个订单
@@ -162,22 +163,22 @@ func (h *OrderHandler) GetReadyToShipOrders(c *gin.Context) {
 func (h *OrderHandler) RefreshOrder(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	orderSN := c.Param("order_sn")
 	if orderSN == "" {
-		BadRequest(c, "订单号不能为空")
+		utils.BadRequest(c, "订单号不能为空")
 		return
 	}
 
 	if err := h.orderService.RefreshOrderFromAPI(c.Request.Context(), shopID, orderSN); err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, gin.H{"message": "刷新成功"})
+	utils.Success(c, gin.H{"message": "刷新成功"})
 }
 
 // ForceUpdateStatusRequest 强制更新状态请求
@@ -192,28 +193,28 @@ type ForceUpdateStatusRequest struct {
 func (h *OrderHandler) ForceUpdateStatus(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	orderSN := c.Param("order_sn")
 	if orderSN == "" {
-		BadRequest(c, "订单号不能为空")
+		utils.BadRequest(c, "订单号不能为空")
 		return
 	}
 
 	var req ForceUpdateStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		BadRequest(c, "参数错误: "+err.Error())
+		utils.BadRequest(c, "参数错误: "+err.Error())
 		return
 	}
 
 	if err := h.orderService.ForceUpdateStatus(c.Request.Context(), shopID, orderSN, req.Status, req.Remark, req.Lock); err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, gin.H{
+	utils.Success(c, gin.H{
 		"message": "状态更新成功",
 		"status":  req.Status,
 		"locked":  req.Lock,
@@ -225,20 +226,20 @@ func (h *OrderHandler) ForceUpdateStatus(c *gin.Context) {
 func (h *OrderHandler) UnlockStatus(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	orderSN := c.Param("order_sn")
 	if orderSN == "" {
-		BadRequest(c, "订单号不能为空")
+		utils.BadRequest(c, "订单号不能为空")
 		return
 	}
 
 	if err := h.orderService.UnlockStatus(c.Request.Context(), shopID, orderSN); err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, gin.H{"message": "解锁成功，订单状态恢复自动更新"})
+	utils.Success(c, gin.H{"message": "解锁成功，订单状态恢复自动更新"})
 }

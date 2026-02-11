@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"balance/backend/internal/services"
+	"balance/backend/internal/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,7 +38,7 @@ func (h *ShopHandler) GetAuthURL(c *gin.Context) {
 	}
 
 	url := h.shopService.GetAuthURL(region, userID)
-	Success(c, gin.H{"url": url})
+	utils.Success(c, gin.H{"url": url})
 }
 
 // AuthCallback 授权回调
@@ -135,11 +136,11 @@ func (h *ShopHandler) ListShops(c *gin.Context) {
 
 	shops, total, err := h.shopService.ListShops(c.Request.Context(), page, pageSize, status, userID)
 	if err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	SuccessWithPage(c, shops, total, page, pageSize)
+	utils.SuccessWithPage(c, shops, total, page, pageSize)
 }
 
 // GetShop 获取店铺详情
@@ -147,17 +148,17 @@ func (h *ShopHandler) ListShops(c *gin.Context) {
 func (h *ShopHandler) GetShop(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	shop, err := h.shopService.GetShop(c.Request.Context(), shopID)
 	if err != nil {
-		NotFound(c, "店铺不存在")
+		utils.NotFound(c, "店铺不存在")
 		return
 	}
 
-	Success(c, shop)
+	utils.Success(c, shop)
 }
 
 // UpdateShopStatusRequest 更新店铺状态请求
@@ -170,22 +171,22 @@ type UpdateShopStatusRequest struct {
 func (h *ShopHandler) UpdateShopStatus(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	var req UpdateShopStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		BadRequest(c, "参数错误")
+		utils.BadRequest(c, "参数错误")
 		return
 	}
 
 	if err := h.shopService.UpdateShopStatus(c.Request.Context(), shopID, req.Status); err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, nil)
+	utils.Success(c, nil)
 }
 
 // DeleteShop 删除店铺
@@ -193,16 +194,16 @@ func (h *ShopHandler) UpdateShopStatus(c *gin.Context) {
 func (h *ShopHandler) DeleteShop(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	if err := h.shopService.DeleteShop(c.Request.Context(), shopID); err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, nil)
+	utils.Success(c, nil)
 }
 
 // RefreshToken 刷新Token
@@ -210,16 +211,16 @@ func (h *ShopHandler) DeleteShop(c *gin.Context) {
 func (h *ShopHandler) RefreshToken(c *gin.Context) {
 	shopID, err := strconv.ParseUint(c.Param("shop_id"), 10, 64)
 	if err != nil {
-		BadRequest(c, "店铺ID格式错误")
+		utils.BadRequest(c, "店铺ID格式错误")
 		return
 	}
 
 	if err := h.shopService.RefreshToken(c.Request.Context(), shopID); err != nil {
-		InternalError(c, err.Error())
+		utils.InternalError(c, err.Error())
 		return
 	}
 
-	Success(c, gin.H{"message": "Token刷新成功"})
+	utils.Success(c, gin.H{"message": "Token刷新成功"})
 }
 
 // BindShopRequest 绑定店铺请求
@@ -233,7 +234,7 @@ func (h *ShopHandler) BindShop(c *gin.Context) {
 	var req BindShopRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fmt.Printf("[DEBUG] BindShop: 参数错误 - %v\n", err)
-		BadRequest(c, "参数错误: "+err.Error())
+		utils.BadRequest(c, "参数错误: "+err.Error())
 		return
 	}
 
@@ -241,7 +242,7 @@ func (h *ShopHandler) BindShop(c *gin.Context) {
 	adminID, exists := c.Get("user_id")
 	if !exists {
 		fmt.Printf("[DEBUG] BindShop: 未登录，user_id不存在\n")
-		Unauthorized(c, "未登录")
+		utils.Unauthorized(c, "未登录")
 		return
 	}
 
@@ -249,10 +250,10 @@ func (h *ShopHandler) BindShop(c *gin.Context) {
 
 	if err := h.shopService.BindShopToAdmin(c.Request.Context(), req.ShopID, adminID.(int64)); err != nil {
 		fmt.Printf("[DEBUG] BindShop error: %v\n", err)
-		Error(c, 400, err.Error())
+		utils.Error(c, 400, err.Error())
 		return
 	}
 
 	fmt.Printf("[DEBUG] BindShop success\n")
-	Success(c, gin.H{"message": "绑定成功"})
+	utils.Success(c, gin.H{"message": "绑定成功"})
 }

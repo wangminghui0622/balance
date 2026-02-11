@@ -1,4 +1,4 @@
-package handlers
+package utils
 
 import (
 	"net/http"
@@ -24,7 +24,7 @@ type PageResponse struct {
 // Success 成功响应
 func Success(c *gin.Context, data interface{}) {
 	c.JSON(http.StatusOK, Response{
-		Code:    0,
+		Code:    CodeSuccess,
 		Message: "success",
 		Data:    data,
 	})
@@ -33,7 +33,7 @@ func Success(c *gin.Context, data interface{}) {
 // SuccessWithPage 分页成功响应
 func SuccessWithPage(c *gin.Context, list interface{}, total int64, page, pageSize int) {
 	c.JSON(http.StatusOK, Response{
-		Code:    0,
+		Code:    CodeSuccess,
 		Message: "success",
 		Data: PageResponse{
 			Total:    total,
@@ -41,6 +41,15 @@ func SuccessWithPage(c *gin.Context, list interface{}, total int64, page, pageSi
 			PageSize: pageSize,
 			List:     list,
 		},
+	})
+}
+
+// SuccessWithCode 成功响应（指定code）
+func SuccessWithCode(c *gin.Context, code int, data interface{}) {
+	c.JSON(http.StatusOK, Response{
+		Code:    code,
+		Message: "success",
+		Data:    data,
 	})
 }
 
@@ -54,29 +63,25 @@ func Error(c *gin.Context, code int, message string) {
 
 // BadRequest 参数错误
 func BadRequest(c *gin.Context, message string) {
-	Error(c, 400, message)
+	Error(c, CodeBadRequest, message)
 }
 
 // Unauthorized 未授权
 func Unauthorized(c *gin.Context, message string) {
-	Error(c, 401, message)
+	Error(c, CodeUnauthorized, message)
+}
+
+// Forbidden 禁止访问
+func Forbidden(c *gin.Context, message string) {
+	Error(c, CodeForbidden, message)
 }
 
 // NotFound 资源不存在
 func NotFound(c *gin.Context, message string) {
-	Error(c, 404, message)
+	Error(c, CodeNotFound, message)
 }
 
 // InternalError 内部错误
 func InternalError(c *gin.Context, message string) {
-	Error(c, 500, message)
-}
-
-// SuccessWithCode 成功响应（指定code）
-func SuccessWithCode(c *gin.Context, code int, data interface{}) {
-	c.JSON(http.StatusOK, Response{
-		Code:    code,
-		Message: "success",
-		Data:    data,
-	})
+	Error(c, CodeInternalError, message)
 }

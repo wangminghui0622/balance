@@ -1,4 +1,4 @@
-package services
+package shopower
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// OrderService 订单服务
+// OrderService 订单服务（店主专用）
 type OrderService struct {
 	db          *gorm.DB
 	shopService *ShopService
@@ -30,33 +30,34 @@ func NewOrderService() *OrderService {
 	}
 }
 
-// SyncOrders 同步订单
-func (s *OrderService) SyncOrders(ctx context.Context, shopID uint64, timeFrom, timeTo time.Time, orderStatus string) error {
+// SyncOrders 同步订单（支持分时间段、分页、限流、重试）
+func (s *OrderService) SyncOrders(ctx context.Context, adminID int64, shopID int64, timeFrom, timeTo time.Time) (int, error) {
+	shop, err := s.shopService.GetShop(ctx, adminID, shopID)
+	if err != nil {
+		return 0, err
+	}
+
 	rdb := database.GetRedis()
 	lockKey := fmt.Sprintf(consts.KeySyncLock, shopID)
-
 	ok, err := rdb.SetNX(ctx, lockKey, time.Now().Unix(), consts.SyncLockExpire).Result()
 	if err != nil {
-		return fmt.Errorf("获取同步锁失败: %w", err)
+		return 0, fmt.Errorf("获取同步锁失败: %w", err)
 	}
 	if !ok {
-		return fmt.Errorf("正在同步中，请稍后再试")
+		return 0, fmt.Errorf("正在同步中，请稍后再试")
 	}
 	defer rdb.Del(ctx, lockKey)
 
-	shop, err := s.shopService.GetShop(ctx, shopID)
+	accessToken, err := s.getAccessToken(ctx, uint64(shopID))
 	if err != nil {
-		return fmt.Errorf("店铺不存在: %w", err)
+		return 0, fmt.Errorf("获取访问令牌失败: %w", err)
 	}
 
-	accessToken, err := s.shopService.GetAccessToken(ctx, shopID)
-	if err != nil {
-		return err
-	}
-
+	// 分时间段同步（Shopee API限制15天）
 	maxRange := int64(consts.ShopeeMaxTimeRange)
 	fromTs := timeFrom.Unix()
 	toTs := timeTo.Unix()
+	totalCount := 0
 
 	for fromTs < toTs {
 		endTs := fromTs + maxRange
@@ -64,44 +65,40 @@ func (s *OrderService) SyncOrders(ctx context.Context, shopID uint64, timeFrom, 
 			endTs = toTs
 		}
 
-		if err := s.syncOrdersInRange(ctx, shopID, shop.Region, accessToken, fromTs, endTs, orderStatus); err != nil {
-			return err
+		count, err := s.syncOrdersInRange(ctx, uint64(shopID), shop.Region, accessToken, fromTs, endTs, "")
+		if err != nil {
+			return totalCount, err
 		}
-
+		totalCount += count
 		fromTs = endTs
 	}
 
-	return nil
+	s.shopService.UpdateLastSyncTime(uint64(shopID))
+	return totalCount, nil
 }
 
-func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, region, accessToken string, timeFrom, timeTo int64, orderStatus string) error {
+// syncOrdersInRange 在指定时间范围内同步订单（支持分页、限流、重试）
+func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, region, accessToken string, timeFrom, timeTo int64, orderStatus string) (int, error) {
 	client := shopee.NewClient(region)
 	limiter := shopee.GetRateLimiter(shopID)
 
 	cursor := ""
 	pageSize := consts.ShopeeOrderListPageSize
+	totalCount := 0
 
 	for {
 		if err := limiter.Wait(ctx); err != nil {
-			return fmt.Errorf("限流等待被取消: %w", err)
+			return totalCount, fmt.Errorf("限流等待被取消: %w", err)
 		}
 
 		var listResp *shopee.OrderListResponse
 		err := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
 			var err error
-			listResp, err = client.GetOrderList(
-				accessToken, shopID,
-				"create_time",
-				timeFrom,
-				timeTo,
-				pageSize,
-				cursor,
-				orderStatus,
-			)
+			listResp, err = client.GetOrderList(accessToken, shopID, "create_time", timeFrom, timeTo, pageSize, cursor, orderStatus)
 			return err
 		})
 		if err != nil {
-			return fmt.Errorf("获取订单列表失败: %w", err)
+			return totalCount, fmt.Errorf("获取订单列表失败: %w", err)
 		}
 
 		if len(listResp.Response.OrderList) == 0 {
@@ -113,6 +110,7 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 			orderSNs = append(orderSNs, o.OrderSN)
 		}
 
+		// 分批获取订单详情
 		for i := 0; i < len(orderSNs); i += consts.ShopeeOrderDetailMaxSize {
 			end := i + consts.ShopeeOrderDetailMaxSize
 			if end > len(orderSNs) {
@@ -121,7 +119,7 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 			batch := orderSNs[i:end]
 
 			if err := limiter.Wait(ctx); err != nil {
-				return fmt.Errorf("限流等待被取消: %w", err)
+				return totalCount, fmt.Errorf("限流等待被取消: %w", err)
 			}
 
 			var detailResp *shopee.OrderDetailResponse
@@ -131,14 +129,15 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 				return err
 			})
 			if err != nil {
-				return fmt.Errorf("获取订单详情失败: %w", err)
+				return totalCount, fmt.Errorf("获取订单详情失败: %w", err)
 			}
 
 			for _, detail := range detailResp.Response.OrderList {
-				if err := s.saveOrder(ctx, shopID, &detail); err != nil {
+				if err := s.saveOrderFull(ctx, shopID, &detail); err != nil {
 					fmt.Printf("保存订单失败 shop_id=%d order_sn=%s: %v\n", shopID, detail.OrderSN, err)
 					continue
 				}
+				totalCount++
 			}
 		}
 
@@ -148,7 +147,21 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 		cursor = listResp.Response.NextCursor
 	}
 
-	return nil
+	return totalCount, nil
+}
+
+func (s *OrderService) getAccessToken(ctx context.Context, shopID uint64) (string, error) {
+	var auth models.ShopAuthorization
+	if err := s.db.Where("shop_id = ?", shopID).First(&auth).Error; err != nil {
+		return "", fmt.Errorf("店铺未授权")
+	}
+	if auth.IsAccessTokenExpired() {
+		if err := s.shopService.RefreshToken(ctx, shopID); err != nil {
+			return "", err
+		}
+		s.db.Where("shop_id = ?", shopID).First(&auth)
+	}
+	return auth.AccessToken, nil
 }
 
 func (s *OrderService) saveOrder(ctx context.Context, shopID uint64, detail *shopee.OrderDetail) error {
@@ -158,10 +171,12 @@ func (s *OrderService) saveOrder(ctx context.Context, shopID uint64, detail *sho
 	if err := s.db.Select("id", "order_status", "status_locked").
 		Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).
 		First(&existingOrder).Error; err == nil {
+		// 状态锁定时只更新部分字段
 		if existingOrder.StatusLocked {
 			return s.saveOrderWithoutStatus(ctx, shopID, detail, existingOrder.ID)
 		}
 
+		// 状态优先级检查
 		currentPriority, currentExists := consts.OrderStatusPriority[existingOrder.OrderStatus]
 		newPriority, newExists := consts.OrderStatusPriority[detail.OrderStatus]
 		if currentExists && newExists && newPriority < currentPriority {
@@ -169,6 +184,7 @@ func (s *OrderService) saveOrder(ctx context.Context, shopID uint64, detail *sho
 		}
 	}
 
+	// 检查更新时间缓存
 	if detail.UpdateTime > 0 {
 		updateTimeKey := fmt.Sprintf(consts.KeyOrderUpdateTime, shopID, detail.OrderSN)
 		cachedTime, err := rdb.Get(ctx, updateTimeKey).Result()
@@ -184,6 +200,7 @@ func (s *OrderService) saveOrder(ctx context.Context, shopID uint64, detail *sho
 	return s.saveOrderFull(ctx, shopID, detail)
 }
 
+// saveOrderFull 完整保存订单（包含商品和地址）
 func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail *shopee.OrderDetail) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var createTime, updateTime, payTime, shipByDate *time.Time
@@ -226,10 +243,10 @@ func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail 
 			return err
 		}
 
+		// 保存订单商品
 		if err := tx.Where("order_id = ?", order.ID).Delete(&models.OrderItem{}).Error; err != nil {
 			return err
 		}
-
 		for _, item := range detail.ItemList {
 			orderItem := models.OrderItem{
 				OrderID:   order.ID,
@@ -249,10 +266,10 @@ func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail 
 			}
 		}
 
+		// 保存订单地址
 		if err := tx.Where("order_id = ?", order.ID).Delete(&models.OrderAddress{}).Error; err != nil {
 			return err
 		}
-
 		addr := detail.RecipientAddress
 		orderAddress := models.OrderAddress{
 			OrderID:     order.ID,
@@ -272,6 +289,7 @@ func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail 
 			return err
 		}
 
+		// 缓存订单状态
 		rdb := database.GetRedis()
 		statusKey := fmt.Sprintf(consts.KeyOrderStatus, shopID, detail.OrderSN)
 		rdb.Set(ctx, statusKey, detail.OrderStatus, consts.OrderStatusExpire)
@@ -280,6 +298,7 @@ func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail 
 	})
 }
 
+// saveOrderWithoutStatus 保存订单但不更新状态
 func (s *OrderService) saveOrderWithoutStatus(ctx context.Context, shopID uint64, detail *shopee.OrderDetail, orderID uint64) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var updateTime, shipByDate *time.Time
@@ -302,6 +321,7 @@ func (s *OrderService) saveOrderWithoutStatus(ctx context.Context, shopID uint64
 			return err
 		}
 
+		// 更新订单商品
 		if err := tx.Where("order_id = ?", orderID).Delete(&models.OrderItem{}).Error; err != nil {
 			return err
 		}
@@ -324,6 +344,7 @@ func (s *OrderService) saveOrderWithoutStatus(ctx context.Context, shopID uint64
 			}
 		}
 
+		// 更新订单地址
 		if err := tx.Where("order_id = ?", orderID).Delete(&models.OrderAddress{}).Error; err != nil {
 			return err
 		}
@@ -355,61 +376,36 @@ func (s *OrderService) SaveOrderFromWebhook(ctx context.Context, shopID uint64, 
 	return s.saveOrder(ctx, shopID, detail)
 }
 
-// OrderQueryParams 订单查询参数
-type OrderQueryParams struct {
-	ShopID    uint64
-	OrderSN   string
-	Status    string
-	StartTime string
-	EndTime   string
-	Page      int
-	PageSize  int
-	AdminID   int64
-}
-
 // ListOrders 获取订单列表
-func (s *OrderService) ListOrders(ctx context.Context, params OrderQueryParams) ([]models.Order, int64, error) {
-	var orders []models.Order
+func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int64, status, startTime, endTime string, page, pageSize int) ([]models.Order, int64, error) {
+	var shopIDs []uint64
+	s.db.Model(&models.Shop{}).Where("admin_id = ?", adminID).Pluck("shop_id", &shopIDs)
+	if len(shopIDs) == 0 {
+		return []models.Order{}, 0, nil
+	}
+
+	query := s.db.Model(&models.Order{}).Where("shop_id IN ?", shopIDs)
+	if shopID > 0 {
+		query = query.Where("shop_id = ?", shopID)
+	}
+	if status != "" {
+		query = query.Where("order_status = ?", status)
+	}
+	if startTime != "" {
+		query = query.Where("create_time >= ?", startTime)
+	}
+	if endTime != "" {
+		query = query.Where("create_time <= ?", endTime)
+	}
+
 	var total int64
-
-	query := s.db.Model(&models.Order{})
-
-	if params.AdminID > 0 {
-		var shopIDs []uint64
-		if err := s.db.Model(&models.Shop{}).Where("admin_id = ?", params.AdminID).Pluck("shop_id", &shopIDs).Error; err != nil {
-			return nil, 0, err
-		}
-		if len(shopIDs) == 0 {
-			return orders, 0, nil
-		}
-		query = query.Where("shop_id IN ?", shopIDs)
-	}
-
-	if params.ShopID > 0 {
-		query = query.Where("shop_id = ?", params.ShopID)
-	}
-	if params.Status != "" {
-		query = query.Where("order_status = ?", params.Status)
-	}
-	if params.OrderSN != "" {
-		query = query.Where("order_sn LIKE ?", "%"+params.OrderSN+"%")
-	}
-
-	if params.StartTime != "" {
-		query = query.Where("create_time >= ?", params.StartTime)
-	}
-	if params.EndTime != "" {
-		query = query.Where("create_time <= ?", params.EndTime+" 23:59:59")
-	}
-
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	offset := (params.Page - 1) * params.PageSize
-	if err := query.Preload("Items").Preload("Address").
-		Offset(offset).Limit(params.PageSize).
-		Order("id DESC").Find(&orders).Error; err != nil {
+	var orders []models.Order
+	offset := (page - 1) * pageSize
+	if err := query.Offset(offset).Limit(pageSize).Order("id DESC").Find(&orders).Error; err != nil {
 		return nil, 0, err
 	}
 
@@ -417,26 +413,90 @@ func (s *OrderService) ListOrders(ctx context.Context, params OrderQueryParams) 
 }
 
 // GetOrder 获取订单详情
-func (s *OrderService) GetOrder(ctx context.Context, shopID uint64, orderSN string) (*models.Order, error) {
-	var order models.Order
-	if err := s.db.Preload("Items").Preload("Address").
-		Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
-		First(&order).Error; err != nil {
+func (s *OrderService) GetOrder(ctx context.Context, adminID int64, shopID int64, orderSN string) (*models.Order, error) {
+	if _, err := s.shopService.GetShop(ctx, adminID, shopID); err != nil {
 		return nil, err
+	}
+	var order models.Order
+	if err := s.db.Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&order).Error; err != nil {
+		return nil, fmt.Errorf("订单不存在")
 	}
 	return &order, nil
 }
 
-// GetReadyToShipOrders 获取待发货订单
-func (s *OrderService) GetReadyToShipOrders(ctx context.Context, shopID uint64, page, pageSize int, adminID int64) ([]models.Order, int64, error) {
-	params := OrderQueryParams{
-		ShopID:   shopID,
-		Status:   consts.OrderStatusReadyToShip,
-		Page:     page,
-		PageSize: pageSize,
-		AdminID:  adminID,
+// RefreshOrder 刷新订单
+func (s *OrderService) RefreshOrder(ctx context.Context, adminID int64, shopID int64, orderSN string) (*models.Order, error) {
+	shop, err := s.shopService.GetShop(ctx, adminID, shopID)
+	if err != nil {
+		return nil, err
 	}
-	return s.ListOrders(ctx, params)
+
+	accessToken, err := s.getAccessToken(ctx, uint64(shopID))
+	if err != nil {
+		return nil, err
+	}
+
+	client := shopee.NewClient(shop.Region)
+	orderDetailsResp, err := client.GetOrderDetail(accessToken, uint64(shopID), []string{orderSN})
+	if err != nil {
+		return nil, fmt.Errorf("获取订单详情失败: %w", err)
+	}
+
+	if len(orderDetailsResp.Response.OrderList) == 0 {
+		return nil, fmt.Errorf("订单不存在")
+	}
+
+	detail := &orderDetailsResp.Response.OrderList[0]
+	if err := s.saveOrder(ctx, uint64(shopID), detail); err != nil {
+		return nil, err
+	}
+
+	var order models.Order
+	s.db.Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&order)
+	return &order, nil
+}
+
+// ForceUpdateStatus 强制更新订单状态
+func (s *OrderService) ForceUpdateStatus(ctx context.Context, adminID int64, shopID int64, orderSN, newStatus string) error {
+	if _, err := s.shopService.GetShop(ctx, adminID, shopID); err != nil {
+		return err
+	}
+
+	var order models.Order
+	if err := s.db.Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&order).Error; err != nil {
+		return fmt.Errorf("订单不存在")
+	}
+
+	updates := map[string]interface{}{
+		"order_status":  newStatus,
+		"status_locked": true,
+		"status_remark": "店主手动更新",
+	}
+	return s.db.Model(&order).Updates(updates).Error
+}
+
+// UnlockOrderStatus 解锁订单状态
+func (s *OrderService) UnlockOrderStatus(ctx context.Context, adminID int64, shopID int64, orderSN string) error {
+	if _, err := s.shopService.GetShop(ctx, adminID, shopID); err != nil {
+		return err
+	}
+
+	result := s.db.Model(&models.Order{}).
+		Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
+		Updates(map[string]interface{}{
+			"status_locked": false,
+			"status_remark": "",
+		})
+
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("订单不存在")
+	}
+	return result.Error
+}
+
+// GetReadyToShipOrders 获取待发货订单
+func (s *OrderService) GetReadyToShipOrders(ctx context.Context, adminID int64, shopID int64, page, pageSize int) ([]models.Order, int64, error) {
+	return s.ListOrders(ctx, adminID, shopID, consts.OrderStatusReadyToShip, "", "", page, pageSize)
 }
 
 // GetOrderStatus 从缓存或数据库获取订单状态
@@ -460,24 +520,31 @@ func (s *OrderService) GetOrderStatus(ctx context.Context, shopID uint64, orderS
 	}
 
 	rdb.Set(ctx, statusKey, order.OrderStatus, consts.OrderStatusExpire)
-
 	return order.OrderStatus, nil
 }
 
-// RefreshOrderFromAPI 从API刷新单个订单
+// IsStatusLocked 检查订单状态是否被锁定
+func (s *OrderService) IsStatusLocked(ctx context.Context, shopID uint64, orderSN string) (bool, error) {
+	var order models.Order
+	if err := s.db.Select("status_locked").Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&order).Error; err != nil {
+		return false, err
+	}
+	return order.StatusLocked, nil
+}
+
+// RefreshOrderFromAPI 从API刷新单个订单（无权限验证，供内部使用）
 func (s *OrderService) RefreshOrderFromAPI(ctx context.Context, shopID uint64, orderSN string) error {
-	shop, err := s.shopService.GetShop(ctx, shopID)
-	if err != nil {
+	var shop models.Shop
+	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {
 		return fmt.Errorf("店铺不存在: %w", err)
 	}
 
-	accessToken, err := s.shopService.GetAccessToken(ctx, shopID)
+	accessToken, err := s.getAccessToken(ctx, shopID)
 	if err != nil {
 		return err
 	}
 
 	client := shopee.NewClient(shop.Region)
-
 	detailResp, err := client.GetOrderDetail(accessToken, shopID, []string{orderSN})
 	if err != nil {
 		return fmt.Errorf("获取订单详情失败: %w", err)
@@ -488,80 +555,4 @@ func (s *OrderService) RefreshOrderFromAPI(ctx context.Context, shopID uint64, o
 	}
 
 	return s.saveOrder(ctx, shopID, &detailResp.Response.OrderList[0])
-}
-
-// ForceUpdateStatus 强制更新订单状态
-func (s *OrderService) ForceUpdateStatus(ctx context.Context, shopID uint64, orderSN string, newStatus string, remark string, lock bool) error {
-	if _, ok := consts.OrderStatusPriority[newStatus]; !ok {
-		return fmt.Errorf("无效的订单状态: %s", newStatus)
-	}
-
-	var order models.Order
-	if err := s.db.Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&order).Error; err != nil {
-		return fmt.Errorf("订单不存在: %w", err)
-	}
-
-	oldStatus := order.OrderStatus
-
-	updates := map[string]interface{}{
-		"order_status":  newStatus,
-		"status_locked": lock,
-		"status_remark": remark,
-	}
-	if err := s.db.Model(&order).Updates(updates).Error; err != nil {
-		return fmt.Errorf("更新状态失败: %w", err)
-	}
-
-	rdb := database.GetRedis()
-	statusKey := fmt.Sprintf(consts.KeyOrderStatus, shopID, orderSN)
-	updateTimeKey := fmt.Sprintf(consts.KeyOrderUpdateTime, shopID, orderSN)
-	rdb.Del(ctx, statusKey, updateTimeKey)
-
-	log := models.OperationLog{
-		ShopID:        shopID,
-		OrderSN:       orderSN,
-		OperationType: "force_status_update",
-		OperationDesc: fmt.Sprintf("强制更新状态: %s -> %s, 锁定: %v, 原因: %s", oldStatus, newStatus, lock, remark),
-		Status:        consts.OpStatusSuccess,
-	}
-	s.db.Create(&log)
-
-	return nil
-}
-
-// UnlockStatus 解锁订单状态
-func (s *OrderService) UnlockStatus(ctx context.Context, shopID uint64, orderSN string) error {
-	result := s.db.Model(&models.Order{}).
-		Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
-		Updates(map[string]interface{}{
-			"status_locked": false,
-			"status_remark": "",
-		})
-
-	if result.Error != nil {
-		return fmt.Errorf("解锁失败: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("订单不存在")
-	}
-
-	log := models.OperationLog{
-		ShopID:        shopID,
-		OrderSN:       orderSN,
-		OperationType: "unlock_status",
-		OperationDesc: "解锁订单状态，恢复自动更新",
-		Status:        consts.OpStatusSuccess,
-	}
-	s.db.Create(&log)
-
-	return nil
-}
-
-// IsStatusLocked 检查订单状态是否被锁定
-func (s *OrderService) IsStatusLocked(ctx context.Context, shopID uint64, orderSN string) (bool, error) {
-	var order models.Order
-	if err := s.db.Select("status_locked").Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&order).Error; err != nil {
-		return false, err
-	}
-	return order.StatusLocked, nil
 }
