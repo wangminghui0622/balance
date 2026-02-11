@@ -1,0 +1,181 @@
+package consts
+
+import "time"
+
+// ==================== 店铺状态 ====================
+
+const (
+	ShopStatusDisabled = 0 // 禁用
+	ShopStatusEnabled  = 1 // 正常
+)
+
+// ==================== 订单状态 (虾皮订单状态) ====================
+
+const (
+	OrderStatusUnpaid         = "UNPAID"          // 未付款
+	OrderStatusReadyToShip    = "READY_TO_SHIP"   // 待发货
+	OrderStatusProcessed      = "PROCESSED"       // 已处理
+	OrderStatusShipped        = "SHIPPED"         // 已发货
+	OrderStatusCompleted      = "COMPLETED"       // 已完成
+	OrderStatusInCancel       = "IN_CANCEL"       // 取消中
+	OrderStatusCancelled      = "CANCELLED"       // 已取消
+	OrderStatusInvoicePending = "INVOICE_PENDING" // 待开票
+)
+
+// OrderStatusPriority 订单状态优先级（数字越大越靠后，不可逆）
+var OrderStatusPriority = map[string]int{
+	OrderStatusUnpaid:         1,
+	OrderStatusInvoicePending: 2,
+	OrderStatusReadyToShip:    3,
+	OrderStatusProcessed:      4,
+	OrderStatusShipped:        5,
+	OrderStatusCompleted:      6,
+	OrderStatusInCancel:       7,
+	OrderStatusCancelled:      8,
+}
+
+// ==================== 发货状态 ====================
+
+const (
+	ShipStatusPending = 0 // 待发货
+	ShipStatusShipped = 1 // 已发货
+	ShipStatusFailed  = 2 // 发货失败
+)
+
+// ==================== 操作类型 ====================
+
+const (
+	OpTypeAuthCallback  = "auth_callback"
+	OpTypeTokenRefresh  = "token_refresh"
+	OpTypeOrderSync     = "order_sync"
+	OpTypeOrderShip     = "order_ship"
+	OpTypeLogisticsSync = "logistics_sync"
+	OpTypeWebhook       = "webhook"
+)
+
+// ==================== Webhook事件类型 ====================
+
+const (
+	WebhookShopAuth          = 0
+	WebhookOrderStatus       = 3
+	WebhookTrackingUpdate    = 4
+	WebhookBannedItem        = 5
+	WebhookPromotionUpdate   = 7
+	WebhookReservedStock     = 8
+	WebhookBuyerCancelOrder  = 9
+	WebhookSellerCancelOrder = 9
+)
+
+// ==================== 操作状态 ====================
+
+const (
+	OpStatusFailed  = 0
+	OpStatusSuccess = 1
+)
+
+// ==================== Redis Key ====================
+
+const (
+	KeyShopToken       = "shopee:token:%d"
+	KeyShopInfo        = "shopee:shop:%d"
+	KeyOrderStatus     = "shopee:order:status:%d:%s"
+	KeySyncLock        = "shopee:lock:sync:%d"
+	KeyShipLock        = "shopee:lock:ship:%d:%s"
+	KeyRateLimit       = "shopee:ratelimit:%d:%s"
+	KeyShipQueue       = "shopee:queue:ship"
+	KeyLogistics       = "shopee:logistics:%d"
+	KeyWebhookDedup    = "shopee:webhook:dedup:%d:%s:%d:%d"
+	KeyOrderLock       = "shopee:lock:order:%d:%s"
+	KeyOrderUpdateTime = "shopee:order:update_time:%d:%s"
+)
+
+// ==================== 缓存过期时间 ====================
+
+const (
+	TokenExpireBuffer  = 5 * time.Minute
+	ShopInfoExpire     = 1 * time.Hour
+	OrderStatusExpire  = 30 * time.Minute
+	SyncLockExpire     = 5 * time.Minute
+	ShipLockExpire     = 1 * time.Minute
+	RateLimitExpire    = 1 * time.Minute
+	LogisticsExpire    = 1 * time.Hour
+	WebhookDedupExpire = 5 * time.Minute
+	OrderLockExpire    = 10 * time.Second
+	OrderUpdateTimeTTL = 24 * time.Hour
+)
+
+// ==================== 分页默认值 ====================
+
+const (
+	DefaultPage     = 1
+	DefaultPageSize = 10
+	MaxPageSize     = 100
+)
+
+// ==================== 虾皮API相关 ====================
+
+const (
+	ShopeeAPITimeout         = 30
+	ShopeeOrderListPageSize  = 100
+	ShopeeOrderDetailMaxSize = 50
+	ShopeeMaxTimeRange       = 15 * 24 * 3600
+	ShopeeAPIRateLimit       = 10
+	ShopeeAPIRetryTimes      = 3
+	ShopeeAPIRetryInterval   = 1000
+)
+
+// ==================== 路由前缀 ====================
+
+const (
+	AdminPrefix = "/api/v1/balance/admin"
+	AppPrefix   = "/api/v1/balance/app"
+)
+
+// ==================== 路由路径 ====================
+
+const (
+	RouteHealth = "/health"
+)
+
+const (
+	RouteAuthCallback      = "/auth/callback"
+	RouteAuthRegister      = "/auth/register"
+	RouteAuthLogin         = "/auth/login"
+	RouteAuthMe            = "/auth/me"
+	RouteAuthSendCode      = "/auth/send-code"
+	RouteAuthResetPassword = "/auth/reset-password"
+)
+
+const (
+	RouteWebhook = "/webhook"
+)
+
+const (
+	RouteShops            = "/shops"
+	RouteShopAuthURL      = "/shops/auth-url"
+	RouteShopBind         = "/shops/bind"
+	RouteShopDetail       = "/shops/:shop_id"
+	RouteShopStatus       = "/shops/:shop_id/status"
+	RouteShopRefreshToken = "/shops/:shop_id/refresh-token"
+)
+
+const (
+	RouteOrders            = "/orders"
+	RouteOrderSync         = "/orders/sync"
+	RouteOrderReadyToShip  = "/orders/ready-to-ship"
+	RouteOrderDetail       = "/orders/:shop_id/:order_sn"
+	RouteOrderRefresh      = "/orders/:shop_id/:order_sn/refresh"
+	RouteOrderForceStatus  = "/orders/:shop_id/:order_sn/force-status"
+	RouteOrderUnlockStatus = "/orders/:shop_id/:order_sn/unlock"
+)
+
+const (
+	RouteShipments             = "/shipments"
+	RouteShipmentShip          = "/shipments/ship"
+	RouteShipmentBatchShip     = "/shipments/batch-ship"
+	RouteShipmentParameter     = "/shipments/shipping-parameter"
+	RouteShipmentTrackingNo    = "/shipments/tracking-number"
+	RouteShipmentDetail        = "/shipments/:shop_id/:order_sn"
+	RouteShipmentSyncLogistics = "/shipments/sync-logistics/:shop_id"
+	RouteShipmentLogistics     = "/shipments/logistics/:shop_id"
+)

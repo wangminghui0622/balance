@@ -1,0 +1,104 @@
+{
+  "pages": [
+    {
+      "path": "pages/login/login",
+      "style": {
+        "navigationBarTitleText": "登录",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/register/register",
+      "style": {
+        "navigationBarTitleText": "注册",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/register/select-role",
+      "style": {
+        "navigationBarTitleText": "选择角色",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/register/register-info",
+      "style": {
+        "navigationBarTitleText": "完善信息",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/forgot-password/forgot-password",
+      "style": {
+        "navigationBarTitleText": "忘记密码",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/forgot-password/set-password",
+      "style": {
+        "navigationBarTitleText": "设置新密码",
+        "navigationStyle": "custom"
+      }
+    }
+  ],
+  "subPackages": [
+    {
+      "root": "shopower",
+      "pages": [
+        {
+          "path": "pages/home/home",
+          "style": {
+            "navigationBarTitleText": "首页",
+            "navigationStyle": "custom"
+          }
+        },
+        {
+          "path": "pages/orders/orders",
+          "style": {
+            "navigationBarTitleText": "订单",
+            "navigationStyle": "custom"
+          }
+        },
+        {
+          "path": "pages/mine/mine",
+          "style": {
+            "navigationBarTitleText": "我的",
+            "navigationStyle": "custom"
+          }
+        }
+      ]
+    },
+    {
+      "root": "operator",
+      "pages": [
+        {
+          "path": "pages/home/home",
+          "style": {
+            "navigationBarTitleText": "首页",
+            "navigationStyle": "custom"
+          }
+        }
+      ]
+    },
+    {
+      "root": "platform",
+      "pages": [
+        {
+          "path": "pages/home/home",
+          "style": {
+            "navigationBarTitleText": "首页",
+            "navigationStyle": "custom"
+          }
+        }
+      ]
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "虾皮订单管理",
+    "navigationBarBackgroundColor": "#F8F8F8",
+    "backgroundColor": "#F8F8F8"
+  }
+}

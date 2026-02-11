@@ -1,0 +1,31 @@
+{
+  "name": "虾皮订单管理",
+  "appid": "__UNI__XSHOPEE",
+  "description": "虾皮订单管理H5应用",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "h5": {
+    "title": "虾皮订单管理",
+    "router": {
+      "mode": "hash",
+      "base": "/balance/app/"
+    },
+    "devServer": {
+      "port": 3001,
+      "proxy": {
+        "/api": {
+          "target": "http://localhost:19091",
+          "changeOrigin": true
+        }
+      }
+    }
+  },
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": false
+    },
+    "usingComponents": true
+  }
+}

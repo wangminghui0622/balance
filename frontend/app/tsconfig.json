@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "lib": ["ESNext", "DOM"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@share/*": ["./share/*"],
+      "@shopower/*": ["./shopower/*"],
+      "@operator/*": ["./operator/*"],
+      "@platform/*": ["./platform/*"]
+    },
+    "types": ["@dcloudio/types"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.vue", "share/**/*.ts", "shopower/**/*.ts", "shopower/**/*.vue", "operator/**/*.ts", "operator/**/*.vue", "platform/**/*.ts", "platform/**/*.vue"]
+}
