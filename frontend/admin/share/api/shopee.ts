@@ -141,7 +141,7 @@ export const shopeeApi = {
         return {
           code: res?.code ?? 500,
           message: res?.message || '',
-          auth_url: res?.data?.url
+          auth_url: res?.data?.auth_url
         } as ShopeeAuthURLResponse
       })
   },
@@ -194,6 +194,20 @@ export const shopeeApi = {
             page_size: res?.data?.page_size || 10
           }
         } as ShopeeShopListResponse
+      })
+  },
+
+  // 绑定店铺到当前用户
+  bindShop: (shopId: number): Promise<{ code: number; message: string }> => {
+    return request
+      .post(`${SHOPOWER_PREFIX}/shops/bind`, {
+        shop_id: shopId
+      })
+      .then((res: any) => {
+        return {
+          code: res?.code ?? 500,
+          message: res?.message || ''
+        }
       })
   }
 }

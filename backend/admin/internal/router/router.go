@@ -35,6 +35,10 @@ func SetupRouter(mode string) *gin.Engine {
 		admin.POST(consts.RouteAuthSendCode, authHandler.SendEmailCode)
 		admin.POST(consts.RouteAuthResetPassword, authHandler.ResetPassword)
 
+		// Shopee授权回调（无需登录，放在公共路由下兼容虾皮配置的回调URL）
+		shopowerShopHandler := shopower.NewShopHandler()
+		admin.GET(consts.RouteAuthCallback, shopowerShopHandler.AuthCallback)
+
 		// 需要登录的公共接口
 		authGroup := admin.Group("")
 		authGroup.Use(handlers.JWTAuthMiddleware())
@@ -45,8 +49,7 @@ func SetupRouter(mode string) *gin.Engine {
 		// ==================== 店主路由 (shopower) ====================
 		shopowerGroup := admin.Group(consts.ShopowerPrefix)
 		{
-			// Shopee授权回调（无需登录）
-			shopowerShopHandler := shopower.NewShopHandler()
+			// Shopee授权回调（无需登录）- 也在 shopower 前缀下注册一份
 			shopowerGroup.GET(consts.RouteShopowerShopCallback, shopowerShopHandler.AuthCallback)
 
 			// 需要登录的店主接口

@@ -409,7 +409,40 @@ func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int
 		return nil, 0, err
 	}
 
+	// 填充订单显示标签
+	for i := range orders {
+		s.fillOrderLabels(&orders[i])
+	}
+
 	return orders, total, nil
+}
+
+// fillOrderLabels 填充订单显示标签
+func (s *OrderService) fillOrderLabels(order *models.Order) {
+	currency := order.Currency
+	if currency == "" {
+		currency = "NT$"
+	}
+	amount := order.TotalAmount.StringFixed(2)
+
+	// 根据订单状态设置不同的显示标签
+	switch order.OrderStatus {
+	case "COMPLETED":
+		// 已结算订单
+		order.AdjustmentLabel1 = fmt.Sprintf("已结算佣金：%s0.00", currency)
+		order.AdjustmentLabel2 = fmt.Sprintf("订单金额：%s%s", currency, amount)
+		order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单金额：%s%s", currency, amount)
+	case "CANCELLED", "IN_CANCEL":
+		// 账款调整订单
+		order.AdjustmentLabel1 = fmt.Sprintf("账款调整佣金：%s0.00", currency)
+		order.AdjustmentLabel2 = fmt.Sprintf("订单账款调整：%s%s", currency, amount)
+		order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单账款调整：%s%s", currency, amount)
+	default:
+		// 未结算订单（待发货、已发货等）
+		order.AdjustmentLabel1 = fmt.Sprintf("未结算佣金：%s0.00", currency)
+		order.AdjustmentLabel2 = fmt.Sprintf("订单金额：%s%s", currency, amount)
+		order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单金额：%s%s", currency, amount)
+	}
 }
 
 // GetOrder 获取订单详情

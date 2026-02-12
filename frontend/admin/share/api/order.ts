@@ -65,6 +65,10 @@ export interface Order {
   updated_at: string
   items?: OrderItem[]
   address?: OrderAddress
+  // 账款调整相关显示字段（服务器返回完整字符串）
+  adjustment_label_1?: string  // 例如: "账款调整佣金：NT$8.00" 或 "未结算佣金: NT$8.00"
+  adjustment_label_2?: string  // 例如: "订单账款调整：NT$36.00" 或 "订单金额: NT$36.00"
+  adjustment_label_3?: string  // 例如: "虾皮订单账款调整：NT$46.00" 或 "虾皮订单金额: NT$46.00"
 }
 
 // 订单列表响应（sheepx格式）

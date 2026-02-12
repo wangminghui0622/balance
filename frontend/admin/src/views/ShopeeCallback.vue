@@ -127,8 +127,8 @@ const autoBindShop = async () => {
     console.log('检测到token，准备调用后端bind接口');
     try {
       // 调用后端的bind接口，将shop_id发送到服务器（token通过Authorization header传递）
-      console.log('发送请求到后端: /api/v1/balance/admin/shops/bind');
-      const response = await request.post('/api/v1/balance/admin/shops/bind', {
+      console.log('发送请求到后端: /api/v1/balance/admin/shopower/shops/bind');
+      const response = await request.post('/api/v1/balance/admin/shopower/shops/bind', {
         shop_id: resultData.value?.shop_id || parseInt(route.query.shop_id as string || '0')
       });
       console.log('后端响应:', response);

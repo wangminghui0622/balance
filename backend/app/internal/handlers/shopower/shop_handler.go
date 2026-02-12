@@ -2,6 +2,7 @@ package shopower
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -12,8 +13,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
-
-// 注意：service已移到 internal/services/shopower 目录
 
 // ShopHandler 店铺处理器（店主专用）
 type ShopHandler struct {
@@ -28,9 +27,7 @@ func NewShopHandler() *ShopHandler {
 }
 
 // GetAuthURL 获取Shopee授权URL
-// GET /api/v1/balance/admin/shopower/shops/auth-url
 func (h *ShopHandler) GetAuthURL(c *gin.Context) {
-	// 从上下文获取用户ID
 	userID, exists := c.Get("user_id")
 	if !exists {
 		utils.Unauthorized(c, "未登录")
@@ -47,43 +44,40 @@ func (h *ShopHandler) GetAuthURL(c *gin.Context) {
 }
 
 // AuthCallback Shopee授权回调
-// GET /api/v1/balance/admin/shopower/shops/callback
 func (h *ShopHandler) AuthCallback(c *gin.Context) {
 	code := c.Query("code")
 	shopIDStr := c.Query("shop_id")
 	stateStr := c.Query("state")
 
-	// 构建前端回调URL
 	buildFrontendURL := func(success bool, shopID uint64, errorMsg string) string {
 		scheme := "https"
 		if c.Request.TLS == nil && c.Request.Header.Get("X-Forwarded-Proto") != "https" {
 			scheme = "http"
 		}
 		host := c.Request.Host
-		frontendPath := "/balance/admin/shopee/auth/callback"
+		frontendPath := "/shopee/auth/callback"
 
-		// 开发环境处理
 		if strings.Contains(host, "localhost") || strings.Contains(host, "127.0.0.1") {
 			host = strings.Replace(host, "19090", "3000", 1)
 			scheme = "http"
 		}
 
 		if success {
-			return fmt.Sprintf("%s://%s%s?success=true&shop_id=%d", scheme, host, frontendPath, shopID)
+			return fmt.Sprintf("%s://%s/balance/app%s?success=true&shop_id=%d", scheme, host, frontendPath, shopID)
 		}
-		return fmt.Sprintf("%s://%s%s?success=false&error=%s", scheme, host, frontendPath, url.QueryEscape(errorMsg))
+		return fmt.Sprintf("%s://%s/balance/app%s?success=false&error=%s", scheme, host, frontendPath, url.QueryEscape(errorMsg))
 	}
 
 	if code == "" || shopIDStr == "" {
 		frontendURL := buildFrontendURL(false, 0, "缺少必要参数")
-		c.Redirect(302, frontendURL)
+		c.Redirect(http.StatusFound, frontendURL)
 		return
 	}
 
 	shopID, err := strconv.ParseInt(shopIDStr, 10, 64)
 	if err != nil {
 		frontendURL := buildFrontendURL(false, 0, "店铺ID格式错误")
-		c.Redirect(302, frontendURL)
+		c.Redirect(http.StatusFound, frontendURL)
 		return
 	}
 
@@ -91,17 +85,15 @@ func (h *ShopHandler) AuthCallback(c *gin.Context) {
 
 	if err := h.shopService.HandleAuthCallback(c.Request.Context(), code, shopID, state); err != nil {
 		frontendURL := buildFrontendURL(false, uint64(shopID), err.Error())
-		c.Redirect(302, frontendURL)
+		c.Redirect(http.StatusFound, frontendURL)
 		return
 	}
 
-	// 授权成功，重定向到前端页面
 	frontendURL := buildFrontendURL(true, uint64(shopID), "")
-	c.Redirect(302, frontendURL)
+	c.Redirect(http.StatusFound, frontendURL)
 }
 
 // ListShops 获取店铺列表
-// GET /api/v1/balance/admin/shopower/shops
 func (h *ShopHandler) ListShops(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -134,7 +126,6 @@ func (h *ShopHandler) ListShops(c *gin.Context) {
 }
 
 // BindShop 绑定店铺
-// POST /api/v1/balance/admin/shopower/shops/bind
 func (h *ShopHandler) BindShop(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -159,7 +150,6 @@ func (h *ShopHandler) BindShop(c *gin.Context) {
 }
 
 // GetShop 获取店铺详情
-// GET /api/v1/balance/admin/shopower/shops/:shop_id
 func (h *ShopHandler) GetShop(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -184,7 +174,6 @@ func (h *ShopHandler) GetShop(c *gin.Context) {
 }
 
 // UpdateShopStatus 更新店铺状态
-// PUT /api/v1/balance/admin/shopower/shops/:shop_id/status
 func (h *ShopHandler) UpdateShopStatus(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -216,7 +205,6 @@ func (h *ShopHandler) UpdateShopStatus(c *gin.Context) {
 }
 
 // DeleteShop 删除店铺
-// DELETE /api/v1/balance/admin/shopower/shops/:shop_id
 func (h *ShopHandler) DeleteShop(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -240,7 +228,6 @@ func (h *ShopHandler) DeleteShop(c *gin.Context) {
 }
 
 // RefreshToken 刷新店铺Token
-// POST /api/v1/balance/admin/shopower/shops/:shop_id/refresh-token
 func (h *ShopHandler) RefreshToken(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {

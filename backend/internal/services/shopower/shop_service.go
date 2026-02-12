@@ -37,6 +37,7 @@ func (s *ShopService) GetAuthURL(ctx context.Context, adminID int64) (string, er
 
 // HandleAuthCallback 处理授权回调
 func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopID int64, adminID int64) error {
+	fmt.Printf("[DEBUG] HandleAuthCallback: shopID=%d, adminID=%d\n", shopID, adminID)
 	cfg := config.Get().Shopee
 	client := shopee.NewClient("SG") // 默认使用SG区域
 
@@ -76,8 +77,10 @@ func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopI
 				"is_cb_shop":         shopInfo.Response.IsCB,
 				"is_shopee_verified": len(shopInfo.Response.SIPAffiliate) > 0,
 			}
+			// 如果店铺未绑定用户且传入了有效的 adminID，则绑定
 			if existingShop.AdminID == 0 && adminID > 0 {
 				updates["admin_id"] = adminID
+				fmt.Printf("[DEBUG] 绑定店铺 %d 到用户 %d\n", shopID, adminID)
 			}
 			if err := tx.Model(&existingShop).Updates(updates).Error; err != nil {
 				return fmt.Errorf("更新店铺信息失败: %w", err)
@@ -105,21 +108,26 @@ func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopI
 			return fmt.Errorf("查询店铺失败: %w", err)
 		}
 
-		auth := models.ShopAuthorization{
-			ShopID:           uint64(shopID),
-			AccessToken:      tokenResp.AccessToken,
-			RefreshToken:     tokenResp.RefreshToken,
-			ExpiresAt:        expiresAt,
-			RefreshExpiresAt: refreshExpiresAt,
-		}
-
 		var existingAuth models.ShopAuthorization
 		if err := tx.Where("shop_id = ?", shopID).First(&existingAuth).Error; err == nil {
-			auth.ID = existingAuth.ID
-			if err := tx.Save(&auth).Error; err != nil {
+			// 更新已有授权信息，只更新需要的字段
+			if err := tx.Model(&existingAuth).Updates(map[string]interface{}{
+				"access_token":       tokenResp.AccessToken,
+				"refresh_token":      tokenResp.RefreshToken,
+				"expires_at":         expiresAt,
+				"refresh_expires_at": refreshExpiresAt,
+			}).Error; err != nil {
 				return fmt.Errorf("更新授权信息失败: %w", err)
 			}
 		} else {
+			// 创建新授权信息
+			auth := models.ShopAuthorization{
+				ShopID:           uint64(shopID),
+				AccessToken:      tokenResp.AccessToken,
+				RefreshToken:     tokenResp.RefreshToken,
+				ExpiresAt:        expiresAt,
+				RefreshExpiresAt: refreshExpiresAt,
+			}
 			if err := tx.Create(&auth).Error; err != nil {
 				return fmt.Errorf("创建授权信息失败: %w", err)
 			}

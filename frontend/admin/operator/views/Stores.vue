@@ -271,6 +271,16 @@ interface Store {
   totalOrders: number
   totalSales: number
   createdAt: string
+  // 兼容模板使用的别名
+  avatar: string
+  name: string
+  storeId: string
+  shopStatus: string
+  operationStatus: string
+  orderCount: number
+  totalAmount: number
+  paymentAmount: number
+  createTime: string
 }
 
 const loading = ref(false)
@@ -378,7 +388,17 @@ async function fetchStores() {
         authStatus: item.authStatus,
         totalOrders: item.totalOrders || 0,
         totalSales: item.totalSales || 0,
-        createdAt: item.createdAt
+        createdAt: item.createdAt,
+        // 兼容模板使用的别名
+        avatar: item.avatar || '',
+        name: item.shopName,
+        storeId: item.shopIdStr || String(item.shopId),
+        shopStatus: item.status === 1 ? 'normal' : (item.status === 0 ? 'closed' : 'paused'),
+        operationStatus: item.authStatus === 1 ? 'operating' : 'paused',
+        orderCount: item.totalOrders || 0,
+        totalAmount: item.totalSales || 0,
+        paymentAmount: 0,
+        createTime: item.createdAt
       }))
       pagination.total = res.data.total
     }

@@ -2,6 +2,7 @@ package router
 
 import (
 	"balance/backend/app/internal/handlers"
+	"balance/backend/app/internal/handlers/shopower"
 	"balance/backend/internal/consts"
 
 	"github.com/gin-gonic/gin"
@@ -21,46 +22,59 @@ func SetupRouter(mode string) *gin.Engine {
 
 	app := r.Group(consts.AppPrefix)
 	{
-		// 用户认证（无需登录）
-		appAuthHandler := handlers.NewAuthHandler()
-		app.POST(consts.RouteAuthRegister, appAuthHandler.Register)
-		app.POST(consts.RouteAuthLogin, appAuthHandler.Login)
-		app.POST(consts.RouteAuthSendCode, appAuthHandler.SendEmailCode)
-		app.POST(consts.RouteAuthResetPassword, appAuthHandler.ResetPassword)
+		// ==================== 公共认证路由（无需登录） ====================
+		authHandler := handlers.NewAuthHandler()
+		app.POST(consts.RouteAuthRegister, authHandler.Register)
+		app.POST(consts.RouteAuthLogin, authHandler.Login)
+		app.POST(consts.RouteAuthSendCode, authHandler.SendEmailCode)
+		app.POST(consts.RouteAuthResetPassword, authHandler.ResetPassword)
 
-		// 需要登录的接口
-		appAuthGroup := app.Group("")
-		appAuthGroup.Use(handlers.JWTAuthMiddleware())
+		// 需要登录的公共接口
+		authGroup := app.Group("")
+		authGroup.Use(handlers.JWTAuthMiddleware())
 		{
-			// 获取当前用户信息
-			appAuthGroup.GET(consts.RouteAuthMe, appAuthHandler.GetCurrentUser)
+			authGroup.GET(consts.RouteAuthMe, authHandler.GetCurrentUser)
+		}
 
-			// 店铺管理
-			appShopHandler := handlers.NewShopHandler()
-			appAuthGroup.GET(consts.RouteShopAuthURL, appShopHandler.GetAuthURL)
-			appAuthGroup.GET(consts.RouteShops, appShopHandler.ListShops)
-			appAuthGroup.POST(consts.RouteShopBind, appShopHandler.BindShop)
-			appAuthGroup.GET(consts.RouteShopDetail, appShopHandler.GetShop)
-			appAuthGroup.PUT(consts.RouteShopStatus, appShopHandler.UpdateShopStatus)
-			appAuthGroup.DELETE(consts.RouteShopDetail, appShopHandler.DeleteShop)
-			appAuthGroup.POST(consts.RouteShopRefreshToken, appShopHandler.RefreshToken)
+		// ==================== 店主路由 (shopower) ====================
+		shopowerGroup := app.Group(consts.ShopowerPrefix)
+		{
+			// Shopee授权回调（无需登录）
+			shopowerShopHandler := shopower.NewShopHandler()
+			shopowerGroup.GET(consts.RouteShopowerShopCallback, shopowerShopHandler.AuthCallback)
 
-			// 订单管理
-			appOrderHandler := handlers.NewOrderHandler()
-			appAuthGroup.POST(consts.RouteOrderSync, appOrderHandler.SyncOrders)
-			appAuthGroup.GET(consts.RouteOrders, appOrderHandler.ListOrders)
-			appAuthGroup.GET(consts.RouteOrderReadyToShip, appOrderHandler.GetReadyToShipOrders)
-			appAuthGroup.GET(consts.RouteOrderDetail, appOrderHandler.GetOrder)
-			appAuthGroup.POST(consts.RouteOrderRefresh, appOrderHandler.RefreshOrder)
+			// 需要登录的店主接口
+			shopowerAuth := shopowerGroup.Group("")
+			shopowerAuth.Use(handlers.JWTAuthMiddleware())
+			{
+				// 店铺管理
+				shopowerAuth.GET(consts.RouteShopowerShopAuthURL, shopowerShopHandler.GetAuthURL)
+				shopowerAuth.GET(consts.RouteShopowerShops, shopowerShopHandler.ListShops)
+				shopowerAuth.POST(consts.RouteShopowerShopBind, shopowerShopHandler.BindShop)
+				shopowerAuth.GET(consts.RouteShopowerShopDetail, shopowerShopHandler.GetShop)
+				shopowerAuth.PUT(consts.RouteShopowerShopStatus, shopowerShopHandler.UpdateShopStatus)
+				shopowerAuth.DELETE(consts.RouteShopowerShopDetail, shopowerShopHandler.DeleteShop)
+				shopowerAuth.POST(consts.RouteShopowerShopRefreshToken, shopowerShopHandler.RefreshToken)
 
-			// 发货管理
-			appShipmentHandler := handlers.NewShipmentHandler()
-			appAuthGroup.POST(consts.RouteShipmentShip, appShipmentHandler.ShipOrder)
-			appAuthGroup.POST(consts.RouteShipmentBatchShip, appShipmentHandler.BatchShipOrders)
-			appAuthGroup.GET(consts.RouteShipmentParameter, appShipmentHandler.GetShippingParameter)
-			appAuthGroup.GET(consts.RouteShipmentTrackingNo, appShipmentHandler.GetTrackingNumber)
-			appAuthGroup.GET(consts.RouteShipments, appShipmentHandler.ListShipments)
-			appAuthGroup.GET(consts.RouteShipmentDetail, appShipmentHandler.GetShipment)
+				// 订单管理
+				shopowerOrderHandler := shopower.NewOrderHandler()
+				shopowerAuth.POST(consts.RouteShopowerOrderSync, shopowerOrderHandler.SyncOrders)
+				shopowerAuth.GET(consts.RouteShopowerOrders, shopowerOrderHandler.ListOrders)
+				shopowerAuth.GET(consts.RouteShopowerOrderReadyToShip, shopowerOrderHandler.GetReadyToShipOrders)
+				shopowerAuth.GET(consts.RouteShopowerOrderDetail, shopowerOrderHandler.GetOrder)
+				shopowerAuth.POST(consts.RouteShopowerOrderRefresh, shopowerOrderHandler.RefreshOrder)
+
+				// 发货管理
+				shopowerShipmentHandler := shopower.NewShipmentHandler()
+				shopowerAuth.POST(consts.RouteShopowerShipmentShip, shopowerShipmentHandler.ShipOrder)
+				shopowerAuth.POST(consts.RouteShopowerShipmentBatchShip, shopowerShipmentHandler.BatchShipOrders)
+				shopowerAuth.GET(consts.RouteShopowerShipmentParameter, shopowerShipmentHandler.GetShippingParameter)
+				shopowerAuth.GET(consts.RouteShopowerShipmentTrackingNo, shopowerShipmentHandler.GetTrackingNumber)
+				shopowerAuth.GET(consts.RouteShopowerShipments, shopowerShipmentHandler.ListShipments)
+				shopowerAuth.GET(consts.RouteShopowerShipmentDetail, shopowerShipmentHandler.GetShipment)
+				shopowerAuth.POST(consts.RouteShopowerShipmentSyncLogistics, shopowerShipmentHandler.SyncLogisticsChannels)
+				shopowerAuth.GET(consts.RouteShopowerShipmentLogistics, shopowerShipmentHandler.GetLogisticsChannels)
+			}
 		}
 	}
 	return r

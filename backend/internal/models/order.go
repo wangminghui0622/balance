@@ -31,6 +31,11 @@ type Order struct {
 	// 关联
 	Items   []OrderItem   `gorm:"foreignKey:OrderID" json:"items,omitempty"`
 	Address *OrderAddress `gorm:"foreignKey:OrderID" json:"address,omitempty"`
+
+	// 账款调整相关显示字段（非数据库字段，由业务逻辑填充）
+	AdjustmentLabel1 string `gorm:"-" json:"adjustment_label_1,omitempty"` // 例如: "账款调整佣金：NT$8.00"
+	AdjustmentLabel2 string `gorm:"-" json:"adjustment_label_2,omitempty"` // 例如: "订单账款调整：NT$36.00"
+	AdjustmentLabel3 string `gorm:"-" json:"adjustment_label_3,omitempty"` // 例如: "虾皮订单账款调整：NT$46.00"
 }
 
 // TableName 指定表名

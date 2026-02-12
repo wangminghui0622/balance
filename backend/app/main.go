@@ -40,9 +40,7 @@ func main() {
 	log.Println("Redis连接成功")
 
 	// 启动定时同步调度器
-	orderService := services.NewOrderService()
-	shopService := services.NewShopService()
-	syncScheduler := services.NewSyncScheduler(database.GetDB(), orderService, shopService)
+	syncScheduler := services.NewSyncScheduler(database.GetDB())
 	syncScheduler.Start()
 	defer syncScheduler.Stop()
 

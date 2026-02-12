@@ -3,7 +3,7 @@
     <template #header>
       <div class="card-header">
         <span>今日订单</span>
-        <el-button type="text" size="small">更多</el-button>
+        <el-button type="text" size="small" @click="goToRealtimeDashboard">更多</el-button>
       </div>
     </template>
     <div class="orders-content">
@@ -32,6 +32,13 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
+
+const goToRealtimeDashboard = () => {
+  router.push('/platform/realtime-dashboard')
+}
 
 const chartOption = ref({
   grid: {

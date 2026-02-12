@@ -193,10 +193,8 @@
 							</el-tag>
 						</div>
 						<div class="order-amount-info">
-							<span v-if="order.unsettledCommission">
-								未结算佣金: NT${{ order.unsettledCommission }}
-							</span>
-							<span>订单金额: NT${{ order.orderAmount }}</span>
+							<span v-if="order.adjustmentLabel1">{{ order.adjustmentLabel1 }}</span>
+							<span v-if="order.adjustmentLabel2">{{ order.adjustmentLabel2 }}</span>
 						</div>
 					</div>
 
@@ -236,14 +234,9 @@
 								</div>
 							</div>
 						</div>
-						<!-- 虾皮订单金额显示在订单级别，多个子商品共用 -->
-						<div class="order-shopee-amount" v-if="order.shopeeAmount">
-							虾皮订单金额: NT${{ order.shopeeAmount }}
-						</div>
-						<!-- 已结算佣金和订单金额 -->
-						<div class="order-settlement-row">
-							<span>已结算佣金: NT${{ order.settledCommission || '0.00' }}</span>
-							<span>订单金额: NT${{ order.orderAmount }}</span>
+						<!-- 虾皮订单金额/账款调整（使用服务器返回的完整字符串） -->
+						<div class="order-shopee-amount" v-if="order.adjustmentLabel3">
+							{{ order.adjustmentLabel3 }}
 						</div>
 					</div>
 				</div>
@@ -296,6 +289,10 @@
 		settledCommission ?: string
 		shopeeAmount ?: string
 		products ?: Product[]
+		// 服务器返回的显示标签
+		adjustmentLabel1 ?: string
+		adjustmentLabel2 ?: string
+		adjustmentLabel3 ?: string
 	}
 
 	// 响应式数据
@@ -411,7 +408,11 @@
 			unsettledCommission: ['READY_TO_SHIP', 'PROCESSED', 'SHIPPED'].includes(apiOrder.order_status) ? '0.00' : '0.00',
 			settledCommission: apiOrder.order_status === 'COMPLETED' ? '0.00' : undefined,
 			shopeeAmount: apiOrder.total_amount,
-			products: products.length > 0 ? products : undefined
+			products: products.length > 0 ? products : undefined,
+			// 服务器返回的显示标签
+			adjustmentLabel1: apiOrder.adjustment_label_1,
+			adjustmentLabel2: apiOrder.adjustment_label_2,
+			adjustmentLabel3: apiOrder.adjustment_label_3
 		}
 	}
 

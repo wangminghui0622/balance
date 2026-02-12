@@ -1,16 +1,36 @@
 <template>
   <div class="stores-page">
-    <!-- 授权店铺BANNER -->
-    <el-card class="auth-banner">
-      <div class="banner-content">
-        <div class="banner-left">
-          <h3>授权店铺BANNER</h3>
-          <p>授权你的店铺,开启合作之旅。</p>
-        </div>
-        <el-button type="default" size="large" class="auth-btn" @click="handleQuickAuth">
-          马上授权
-        </el-button>
-      </div>
+    <!-- 店铺概览 -->
+    <el-card class="overview-card">
+      <template #header>
+        <span class="overview-title">店铺概览</span>
+      </template>
+      <el-row :gutter="20">
+        <el-col :span="6">
+          <div class="overview-item">
+            <div class="overview-label">欠费店铺</div>
+            <div class="overview-value">{{ overview.overdueCount }}</div>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="overview-item">
+            <div class="overview-label">冻结店铺</div>
+            <div class="overview-value">{{ overview.frozenCount }}</div>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="overview-item">
+            <div class="overview-label">闭置店铺</div>
+            <div class="overview-value">{{ overview.closedCount }}</div>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="overview-item">
+            <div class="overview-label">有效店铺总数</div>
+            <div class="overview-value">{{ overview.activeCount }}</div>
+          </div>
+        </el-col>
+      </el-row>
     </el-card>
 
     <!-- 筛选和搜索区域 -->
@@ -48,6 +68,13 @@
             <el-option label="暂停" value="paused" />
           </el-select>
         </el-form-item>
+        <el-form-item label="选择店铺健康">
+          <el-select v-model="filterForm.healthStatus" placeholder="请选择" clearable class="filter-select-small">
+            <el-option label="健康" value="healthy" />
+            <el-option label="警告" value="warning" />
+            <el-option label="异常" value="abnormal" />
+          </el-select>
+        </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="handleQuery">查询</el-button>
           <el-button @click="handleReset">重置</el-button>
@@ -56,7 +83,7 @@
     </el-card>
 
     <!-- 店铺列表 -->
-    <el-card class="stores-list-card">
+    <el-card class="stores-list-card" v-loading="loading">
       <template #header>
         <div class="card-header">
           <span>店铺列表 ({{ storeList.length }})</span>
@@ -106,8 +133,8 @@
                 <div class="detail-value">{{ store.entityType }}</div>
               </div>
               <div class="detail-item">
-                <div class="detail-label">主体姓名</div>
-                <div class="detail-value">{{ store.entityName }}</div>
+                <div class="detail-label">所属店主</div>
+                <div class="detail-value">{{ store.ownerName }}</div>
               </div>
               <div class="detail-item">
                 <div class="detail-label">店铺健康</div>
@@ -127,6 +154,9 @@
           </div>
         </div>
       </div>
+
+      <!-- 空状态 -->
+      <el-empty v-if="storeList.length === 0" description="暂无店铺数据" />
     </el-card>
 
     <!-- 店铺详情对话框 -->
@@ -164,35 +194,87 @@
             </div>
             <div class="detail-row">
               <span class="detail-label">店铺区域</span>
-              <span class="detail-value">{{ currentStore?.storeId }}</span>
+              <span class="detail-value">{{ currentStore?.region || '台湾' }}</span>
             </div>
             <div class="detail-row">
               <span class="detail-label">店铺账号</span>
-              <span class="detail-value">{{ currentStore?.storeId }}</span>
+              <span class="detail-value">{{ currentStore?.account }}</span>
             </div>
             <div class="detail-row">
               <span class="detail-label">主体类型</span>
-              <span class="detail-value">{{ currentStore?.storeId }}</span>
+              <span class="detail-value">{{ currentStore?.entityType }}</span>
             </div>
             <div class="detail-row">
               <span class="detail-label">主体名称</span>
-              <span class="detail-value">{{ currentStore?.storeId }}</span>
+              <span class="detail-value">{{ currentStore?.entityName }}</span>
             </div>
             <div class="detail-row">
               <span class="detail-label">所属店主</span>
-              <span class="detail-value">{{ currentStore?.storeId }}</span>
+              <span class="detail-value">{{ currentStore?.ownerName }}</span>
             </div>
             <div class="detail-row">
               <span class="detail-label">店铺健康</span>
-              <span class="detail-value">{{ currentStore?.storeId }}</span>
+              <span class="detail-value">{{ currentStore?.health }}</span>
             </div>
           </div>
         </el-tab-pane>
         <el-tab-pane label="合作信息" name="cooperation">
           <div class="detail-list">
             <div class="detail-row">
-              <span class="detail-label">合作信息</span>
-              <span class="detail-value">暂无数据</span>
+              <span class="detail-label">合作编号：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">创建时间：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">所属店主：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">合作运营：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">合作开始时间：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">合作结束时间：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">合作剩余天数：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">履约方式：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">店主佣金比例：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">平台佣金比例：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">运营回款比例：</span>
+              <span class="detail-value">示例文字占位符</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">备注信息：</span>
+              <span class="detail-value">--</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">电子合约：</span>
+              <span class="detail-value link-value">点击下载></span>
+            </div>
+            <div class="detail-row risk-row">
+              <span class="detail-label">风险提示：</span>
+              <span class="detail-value risk-value">平台作为第三机构，负责提供技术服务，不对损失承担责任，合作双方责任以双方约定为准。</span>
             </div>
           </div>
         </el-tab-pane>
@@ -223,9 +305,9 @@
           </el-col>
           <el-col :span="6">
             <div class="kpi-card">
-              <div class="kpi-label">未结算佣金(NT$)</div>
+              <div class="kpi-label">未结算回款(NT$)</div>
               <div class="kpi-value">608.50</div>
-              <div class="kpi-sub">托管中的订单佣金</div>
+              <div class="kpi-sub">托管中的订单回款</div>
             </div>
           </el-col>
           <el-col :span="6">
@@ -237,9 +319,9 @@
           </el-col>
           <el-col :span="6">
             <div class="kpi-card">
-              <div class="kpi-label">已结算佣金(NT$)</div>
+              <div class="kpi-label">已结算回款(NT$)</div>
               <div class="kpi-value">24,543.00</div>
-              <div class="kpi-sub">已结算的订单佣金</div>
+              <div class="kpi-sub">已结算的订单回款</div>
             </div>
           </el-col>
         </el-row>
@@ -250,13 +332,10 @@
         <div class="income-header">
           <span class="income-title">
             <span class="title-bar"></span>
-            <span>近期收益</span>
+            <span>近期回款</span>
           </span>
           <el-button type="primary" link size="small" class="detail-button">
             查看详情
-            <svg class="arrow-icon" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
           </el-button>
         </div>
         <div class="income-content">
@@ -270,13 +349,13 @@
               <div class="stat-value">45</div>
             </div>
             <div class="stat-item">
-              <div class="stat-label">预估佣金(NT$)</div>
+              <div class="stat-label">预估回款(NT$)</div>
               <div class="stat-value">540</div>
             </div>
           </div>
           <div class="income-right">
             <div class="chart-container">
-              <v-chart :option="manageChartOption" style="height: 200px; width: 100%;" autoresize />
+              <v-chart :option="manageChartOption" style="height: 180px; width: 100%;" autoresize />
             </div>
           </div>
         </div>
@@ -287,136 +366,75 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { shopeeApi } from '@share/api/shopee'
-import { STORAGE_KEYS, ROUTE_PATH, USER_TYPE_NUM, HTTP_STATUS } from '@share/constants'
+import VChart from 'vue-echarts'
 
 interface Store {
   avatar: string
   name: string
   storeId: string
-  shopId: number // Shopee Shop ID
+  shopId: number
   account: string
-  entityType: string // 个人/企业
+  entityType: string
   entityName: string
+  ownerName: string
   health: string
   expireTime: string
-  shopStatus: string // normal/paused/closed
-  authStatus: string // authorized/unauthorized/expired
-  operationStatus: string // operating/paused
-  authLoading?: boolean
+  region?: string
+  shopStatus: string
+  authStatus: string
+  operationStatus: string
 }
+
+const overview = reactive({
+  overdueCount: 45,
+  frozenCount: 2,
+  closedCount: 10,
+  activeCount: 57
+})
 
 const filterForm = reactive({
   keyword: '',
   shopStatus: '',
   authStatus: '',
-  operationStatus: ''
+  operationStatus: '',
+  healthStatus: ''
 })
 
-const exportReport = ref(false)
 const loading = ref(false)
 const storeList = ref<Store[]>([])
 
-// 检查是否为店主类型（userType=1）
-const isShopOwner = () => {
-  const userType = localStorage.getItem(STORAGE_KEYS.USER_TYPE)
-  return userType === USER_TYPE_NUM.SHOPOWNER.toString()
-}
-
-// 获取店铺列表
-const fetchShopList = async () => {
-  // 只有店主类型才能调用此接口
-  if (!isShopOwner()) {
-    ElMessage.warning('此功能仅限店主类型用户使用')
-    return
-  }
-
-  const token = localStorage.getItem(STORAGE_KEYS.TOKEN)
-  if (!token) {
-    ElMessage.warning('请先登录')
-    return
-  }
-
+const fetchStoreList = async () => {
   loading.value = true
   try {
-    const res = await shopeeApi.getShopList()
-    
-    if (res.code === HTTP_STATUS.OK) {
-      const shopList = res.data?.list || []
-      if (shopList.length > 0) {
-        // 使用完整的店铺数据
-        storeList.value = shopList.map((shop: any) => {
-          let authStatus = 'unauthorized'
-          if (shop.authStatus === 1) authStatus = 'authorized'
-          else if (shop.authStatus === 2) authStatus = 'expired'
-          
-          return {
-            avatar: shop.shopSlug || '',
-            name: shop.shopName || `店铺 ${shop.shopId}`,
-            storeId: shop.shopIdStr || shop.shopId?.toString() || '',
-            shopId: shop.shopId,
-            account: shop.contactEmail || `shop_${shop.shopId}@example.com`,
-            entityType: shop.isCbShop ? '企业' : '个人',
-            entityName: shop.profile?.response?.shopName || `商家${shop.shopId}`,
-            health: shop.ratingStar ? `${shop.ratingStar.toFixed(2)}分` : '待评估',
-            expireTime: shop.expireTime || '未授权',
-            shopStatus: shop.status === 1 ? 'normal' : 'paused',
-            authStatus: authStatus,
-            operationStatus: shop.status === 1 ? 'operating' : 'paused',
-            authLoading: false
-          }
-        })
-      } else {
-        storeList.value = []
-      }
-    } else {
-      ElMessage.error(res.message || '获取店铺列表失败')
-    }
+    // 模拟数据
+    storeList.value = Array.from({ length: 6 }, (_, i) => ({
+      avatar: '',
+      name: '店铺名称示例文字占位符文字占位',
+      storeId: `S123456789${i}`,
+      shopId: 1000 + i,
+      account: `s123456789${i}@gmail.com`,
+      entityType: i % 2 === 0 ? '个人' : '企业',
+      entityName: `商家${i + 1}`,
+      ownerName: '所属店主',
+      health: '店铺健康',
+      expireTime: '2026-01-15 23:59:59',
+      region: '台湾',
+      shopStatus: 'normal',
+      authStatus: 'authorized',
+      operationStatus: 'operating'
+    }))
   } catch (err: any) {
     console.error('获取店铺列表失败:', err)
-    ElMessage.error(err?.response?.data?.message || err?.message || '获取店铺列表失败')
+    ElMessage.error('获取店铺列表失败')
   } finally {
     loading.value = false
   }
 }
 
-const route = useRoute()
-
-// 处理授权成功后的绑定
-const handleAuthSuccess = async () => {
-  const authResult = route.query.auth
-  const shopIdStr = route.query.shop_id as string
-  
-  if (authResult === 'success' && shopIdStr) {
-    const shopId = parseInt(shopIdStr, 10)
-    if (shopId > 0) {
-      try {
-        // 调用绑定接口将店铺绑定到当前用户
-        const res = await shopeeApi.bindShop(shopId)
-        if (res.code === HTTP_STATUS.OK) {
-          ElMessage.success('店铺授权成功！')
-        }
-      } catch (err: any) {
-        console.error('绑定店铺失败:', err)
-        // 绑定失败不影响页面显示，可能店铺已经绑定
-      }
-    }
-    // 清除 URL 参数
-    router.replace({ path: route.path })
-  } else if (authResult === 'failed') {
-    const errorMsg = route.query.error as string
-    ElMessage.error(errorMsg || '授权失败')
-    router.replace({ path: route.path })
-  }
-}
-
-// 组件挂载时获取店铺列表
-onMounted(async () => {
-  await handleAuthSuccess()
-  fetchShopList()
+onMounted(() => {
+  fetchStoreList()
 })
 
 const getShopStatusType = (status: string) => {
@@ -471,24 +489,6 @@ const getOperationStatusText = (status: string) => {
   return map[status] || status
 }
 
-const router = useRouter()
-
-const handleQuickAuth = () => {
-  // 检测登录态
-  const token = localStorage.getItem(STORAGE_KEYS.TOKEN)
-  const userId = localStorage.getItem(STORAGE_KEYS.USER_ID)
-  
-  if (!token || !userId) {
-    ElMessage.warning('请先登录后再进行授权操作')
-    setTimeout(() => {
-      router.push(ROUTE_PATH.LOGIN)
-    }, 1500)
-    return
-  }
-
-  ElMessage.info('快速授权功能开发中...')
-}
-
 const handleQuery = () => {
   ElMessage.success('查询功能开发中...')
 }
@@ -498,6 +498,7 @@ const handleReset = () => {
   filterForm.shopStatus = ''
   filterForm.authStatus = ''
   filterForm.operationStatus = ''
+  filterForm.healthStatus = ''
   ElMessage.success('已重置筛选条件')
 }
 
@@ -542,9 +543,9 @@ const manageChartOption = ref({
   },
   grid: {
     left: '3%',
-    right: '10%',
-    top: '15%',
-    bottom: '3%',
+    right: '4%',
+    top: '25px',
+    bottom: '25px',
     containLabel: true
   },
   xAxis: {
@@ -569,11 +570,11 @@ const manageChartOption = ref({
     type: 'value',
     name: '销售(NT$)',
     nameLocation: 'end',
-    nameGap: 10,
+    nameGap: 5,
     nameTextStyle: {
       color: '#909399',
       fontSize: 12,
-      fontWeight: 500
+      padding: [0, 0, 0, 40]
     },
     axisLine: {
       show: true,
@@ -648,11 +649,7 @@ const handleManage = (store: Store) => {
 }
 
 const handleExportReport = () => {
-  if (exportReport.value) {
-    ElMessage.success('正在导出报表...')
-  } else {
-    ElMessage.info('请先勾选"导出报表"')
-  }
+  ElMessage.info('导出报表功能开发中...')
 }
 </script>
 
@@ -661,45 +658,26 @@ const handleExportReport = () => {
   padding: 20px;
 }
 
-.auth-banner {
+.overview-card {
   margin-bottom: 20px;
-  background: linear-gradient(135deg, #ff6a3a 0%, #ff8c5a 100%);
-  border: none;
 
-  :deep(.el-card__body) {
-    padding: 30px;
+  .overview-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: #303133;
   }
 
-  .banner-content {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    color: white;
-
-    .banner-left {
-      h3 {
-        margin: 0 0 10px 0;
-        font-size: 24px;
-        font-weight: 600;
-      }
-
-      p {
-        margin: 0;
-        font-size: 16px;
-        opacity: 0.9;
-      }
+  .overview-item {
+    .overview-label {
+      font-size: 14px;
+      color: #909399;
+      margin-bottom: 8px;
     }
 
-    .auth-btn {
-      border: 1px solid rgba(255, 255, 255, 0.9);
-      background: transparent;
-      color: rgba(255, 255, 255, 0.95);
-      border-radius: 6px;
-
-      &:hover {
-        border-color: rgba(255, 255, 255, 1);
-        background-color: rgba(255, 255, 255, 0.08);
-      }
+    .overview-value {
+      font-size: 32px;
+      font-weight: 600;
+      color: #303133;
     }
   }
 }
@@ -734,34 +712,12 @@ const handleExportReport = () => {
     width: 13ch;
   }
 
-  /* 强制下拉框和输入框圆角 */
   :deep(.el-input__wrapper),
   :deep(.el-input__inner),
   :deep(.el-select .el-select__wrapper) {
     border-radius: 30px !important;
     overflow: hidden;
   }
-}
-
-/* 下拉弹出框圆角（全局样式） */
-:global(.el-select__popper.el-popper) {
-  border-radius: 8px !important;
-  overflow: hidden;
-}
-
-:global(.el-select-dropdown) {
-  border-radius: 8px !important;
-  overflow: hidden;
-}
-
-:global(.el-select-dropdown__list) {
-  border-radius: 8px !important;
-}
-
-/* 下拉选项内容居中 */
-:global(.el-select-dropdown__item) {
-  text-align: center;
-  justify-content: center;
 }
 
 .stores-list-card {
@@ -793,7 +749,6 @@ const handleExportReport = () => {
       box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
     }
 
-    // 左侧A区域
     .store-left {
       display: flex;
       align-items: center;
@@ -831,7 +786,6 @@ const handleExportReport = () => {
       }
     }
 
-    // 中间B区域
     .store-middle {
       flex: 1;
       min-width: 0;
@@ -872,7 +826,6 @@ const handleExportReport = () => {
       }
     }
 
-    // 右侧C区域
     .store-right {
       display: flex;
       flex-direction: column;
@@ -1010,7 +963,28 @@ const handleExportReport = () => {
       .detail-value {
         font-size: 14px;
         color: #303133;
+
+        &.link-value {
+          color: #409eff;
+          cursor: pointer;
+
+          &:hover {
+            text-decoration: underline;
+          }
+        }
+
+        &.risk-value {
+          color: #909399;
+          font-size: 12px;
+          line-height: 1.6;
+          text-align: right;
+          max-width: 280px;
+        }
       }
+    }
+
+    .risk-row {
+      align-items: flex-start;
     }
   }
 }
@@ -1087,22 +1061,13 @@ const handleExportReport = () => {
           border-radius: 2px;
         }
       }
-
-      .detail-button {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-
-        .arrow-icon {
-          width: 12px;
-          height: 12px;
-        }
-      }
     }
 
     .income-content {
       display: flex;
       gap: 24px;
+      align-items: flex-start;
+      padding-top: 16px;
 
       .income-left {
         width: 120px;
@@ -1132,9 +1097,10 @@ const handleExportReport = () => {
       .income-right {
         flex: 1;
         min-width: 0;
+        min-height: 180px;
 
         .chart-container {
-          height: 200px;
+          height: 180px;
           width: 100%;
         }
       }

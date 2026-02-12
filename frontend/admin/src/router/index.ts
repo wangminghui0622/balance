@@ -64,6 +64,91 @@ const routes: RouteRecordRaw[] = [
         path: '',
         name: 'platform-home',
         component: () => import('@platform/views/Home.vue')
+      },
+      {
+        path: 'realtime-dashboard',
+        name: 'platform-realtime-dashboard',
+        component: () => import('@platform/views/RealtimeDashboard.vue')
+      },
+      {
+        path: 'stores',
+        name: 'platform-stores',
+        component: () => import('@platform/views/Stores.vue')
+      },
+      {
+        path: 'orders',
+        name: 'platform-orders',
+        component: () => import('@platform/views/Orders.vue')
+      },
+      {
+        path: 'finance/bills',
+        name: 'platform-finance-bills',
+        component: () => import('@platform/views/Bills.vue')
+      },
+      {
+        path: 'finance/commission',
+        name: 'platform-finance-commission',
+        component: () => import('@platform/views/Commission.vue')
+      },
+      {
+        path: 'finance/escrow',
+        name: 'platform-finance-escrow',
+        component: () => import('@platform/views/Escrow.vue')
+      },
+      {
+        path: 'finance/penalty',
+        name: 'platform-finance-penalty',
+        component: () => import('@platform/views/Penalty.vue')
+      },
+      {
+        path: 'finance/collection',
+        name: 'platform-finance-collection',
+        component: () => import('@platform/views/Collection.vue')
+      },
+      {
+        path: 'management/cooperation',
+        name: 'platform-management-cooperation',
+        component: () => import('@platform/views/Cooperation.vue')
+      },
+      {
+        path: 'management/finance-audit',
+        name: 'platform-management-finance-audit',
+        component: () => import('@platform/views/FinanceAudit.vue')
+      },
+      {
+        path: 'management/violation',
+        name: 'platform-management-violation',
+        component: () => import('@platform/views/Violation.vue')
+      },
+      {
+        path: 'management/users',
+        name: 'platform-management-users',
+        component: () => import('@platform/views/UserManagement.vue')
+      },
+      {
+        path: 'management/settlement',
+        name: 'platform-management-settlement',
+        component: () => import('@platform/views/Settlement.vue')
+      },
+      {
+        path: 'reports/summary',
+        name: 'platform-reports-summary',
+        component: () => import('@platform/views/ReportSummary.vue')
+      },
+      {
+        path: 'reports/owner',
+        name: 'platform-reports-owner',
+        component: () => import('@platform/views/ReportOwner.vue')
+      },
+      {
+        path: 'reports/platform',
+        name: 'platform-reports-platform',
+        component: () => import('@platform/views/ReportPlatform.vue')
+      },
+      {
+        path: 'reports/operator',
+        name: 'platform-reports-operator',
+        component: () => import('@platform/views/ReportOperator.vue')
       }
     ]
   },

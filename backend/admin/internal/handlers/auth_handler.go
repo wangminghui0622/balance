@@ -156,8 +156,20 @@ func UserTypeMiddleware(allowedUserType int) gin.HandlerFunc {
 			return
 		}
 
-		// 检查用户类型是否匹配
-		if userType.(int) != allowedUserType {
+		// 检查用户类型是否匹配（userType 存储为 int8）
+		var userTypeInt int
+		switch v := userType.(type) {
+		case int8:
+			userTypeInt = int(v)
+		case int:
+			userTypeInt = v
+		default:
+			utils.Error(c, 403, "用户类型无效")
+			c.Abort()
+			return
+		}
+
+		if userTypeInt != allowedUserType {
 			utils.Error(c, 403, "无权限访问此接口")
 			c.Abort()
 			return
