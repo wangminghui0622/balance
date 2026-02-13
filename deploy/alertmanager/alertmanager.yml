@@ -1,0 +1,72 @@
+# Alertmanager 配置文件
+# 部署路径: /etc/alertmanager/alertmanager.yml
+
+global:
+  # 邮件配置
+  smtp_smarthost: 'smtp.example.com:587'
+  smtp_from: 'alertmanager@example.com'
+  smtp_auth_username: 'alertmanager@example.com'
+  smtp_auth_password: 'your_password'
+  smtp_require_tls: true
+
+  # 解决超时
+  resolve_timeout: 5m
+
+# 告警路由
+route:
+  # 默认接收者
+  receiver: 'default-receiver'
+  
+  # 分组配置
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  # 子路由
+  routes:
+    # 严重告警 - 立即通知
+    - match:
+        severity: critical
+      receiver: 'critical-receiver'
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # 警告告警 - 正常通知
+    - match:
+        severity: warning
+      receiver: 'warning-receiver'
+      repeat_interval: 4h
+
+# 接收者配置
+receivers:
+  # 默认接收者
+  - name: 'default-receiver'
+    email_configs:
+      - to: 'ops-team@example.com'
+        send_resolved: true
+
+  # 严重告警接收者
+  - name: 'critical-receiver'
+    email_configs:
+      - to: 'ops-team@example.com,manager@example.com'
+        send_resolved: true
+    # Webhook 通知（可接入钉钉/企业微信/Slack）
+    webhook_configs:
+      - url: 'http://your-webhook-service/alert'
+        send_resolved: true
+
+  # 警告告警接收者
+  - name: 'warning-receiver'
+    email_configs:
+      - to: 'ops-team@example.com'
+        send_resolved: true
+
+# 抑制规则
+inhibit_rules:
+  # 当 critical 告警触发时，抑制同名的 warning 告警
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']

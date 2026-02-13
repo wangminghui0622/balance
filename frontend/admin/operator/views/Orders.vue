@@ -395,30 +395,9 @@ async function fetchShopOptions() {
   }
 }
 
-function loadMockOrders() {
-  orders.value = Array.from({ length: 6 }, (_, i) => ({
-    orderNo: `X250904KQ2P078R`,
-    orderTime: '2025-12-10 23:59:59',
-    storeId: `S123456789${i}`,
-    storeName: '示例文字占位符示例文...',
-    shopeeOrderNo: `250904KQ2P0y8R`,
-    shopeeStatus: i % 2 === 0 ? '待发货' : '已完成',
-    orderAmount: i % 2 === 0 ? 36 : 198,
-    paymentStatus: 'paid',
-    unsettledPayment: i % 3 === 0 ? '8.00' : undefined,
-    settledPayment: i % 3 !== 0 ? '16.00' : undefined,
-    products: []
-  }))
-  pagination.total = 123
-  summaryData.allOrders = { count: 245, amount: 38420 }
-  summaryData.unsettledOrders = { count: 12, amount: 456 }
-  summaryData.settledOrders = { count: 12, amount: 456 }
-  summaryData.adjustments = { count: 12, amount: 456 }
-}
-
 onMounted(() => {
   fetchShopOptions()
-  loadMockOrders()
+  fetchOrders()
 })
 </script>
 

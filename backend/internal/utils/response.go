@@ -4,7 +4,13 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 )
+
+// ToDecimal 将 float64 转换为 decimal.Decimal
+func ToDecimal(f float64) decimal.Decimal {
+	return decimal.NewFromFloat(f)
+}
 
 // Response 统一响应结构
 type Response struct {

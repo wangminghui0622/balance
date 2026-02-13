@@ -11,6 +11,7 @@ import (
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
 	"balance/backend/internal/shopee"
+	"balance/backend/internal/utils"
 
 	"gorm.io/gorm"
 )
@@ -179,7 +180,7 @@ func (s *ShopService) GetAccessToken(ctx context.Context, shopID uint64) (string
 	// 从数据库获取
 	var auth models.ShopAuthorization
 	if err := s.db.Where("shop_id = ?", shopID).First(&auth).Error; err != nil {
-		return "", fmt.Errorf("店铺未授权: %w", err)
+		return "", utils.ErrShopUnauthorized
 	}
 
 	// 检查是否过期，需要刷新
@@ -202,11 +203,11 @@ func (s *ShopService) GetAccessToken(ctx context.Context, shopID uint64) (string
 func (s *ShopService) RefreshToken(ctx context.Context, shopID uint64) error {
 	var auth models.ShopAuthorization
 	if err := s.db.Where("shop_id = ?", shopID).First(&auth).Error; err != nil {
-		return fmt.Errorf("店铺未授权: %w", err)
+		return utils.ErrShopUnauthorized
 	}
 
 	if auth.IsRefreshTokenExpired() {
-		return fmt.Errorf("刷新Token已过期，请重新授权")
+		return utils.ErrShopTokenExpired
 	}
 
 	var shop models.Shop
@@ -321,7 +322,7 @@ func (s *ShopService) GetShop(ctx context.Context, adminID int64, shopID int64) 
 		query = query.Where("admin_id = ?", adminID)
 	}
 	if err := query.First(&shop).Error; err != nil {
-		return nil, fmt.Errorf("店铺不存在或无权限访问")
+		return nil, utils.ErrShopNoPermission
 	}
 	return &shop, nil
 }
@@ -330,10 +331,10 @@ func (s *ShopService) GetShop(ctx context.Context, adminID int64, shopID int64) 
 func (s *ShopService) BindShop(ctx context.Context, adminID int64, shopID int64) error {
 	var shop models.Shop
 	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {
-		return fmt.Errorf("店铺不存在")
+		return utils.ErrShopNotFound
 	}
 	if shop.AdminID > 0 && shop.AdminID != adminID {
-		return fmt.Errorf("该店铺已被其他用户绑定")
+		return utils.ErrShopAlreadyBound
 	}
 	return s.db.Model(&shop).Update("admin_id", adminID).Error
 }
@@ -342,7 +343,7 @@ func (s *ShopService) BindShop(ctx context.Context, adminID int64, shopID int64)
 func (s *ShopService) UpdateShopStatus(ctx context.Context, adminID int64, shopID int64, status int) error {
 	result := s.db.Model(&models.Shop{}).Where("shop_id = ? AND admin_id = ?", shopID, adminID).Update("status", status)
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("店铺不存在或无权限操作")
+		return utils.ErrShopNoPermission
 	}
 	return result.Error
 }
@@ -356,7 +357,16 @@ func (s *ShopService) DeleteShop(ctx context.Context, adminID int64, shopID int6
 func (s *ShopService) RefreshShopToken(ctx context.Context, adminID int64, shopID int64) error {
 	var shop models.Shop
 	if err := s.db.Where("shop_id = ? AND admin_id = ?", shopID, adminID).First(&shop).Error; err != nil {
-		return fmt.Errorf("店铺不存在或无权限操作")
+		return utils.ErrShopNoPermission
 	}
 	return s.RefreshToken(ctx, uint64(shopID))
+}
+
+// GetShopByID 根据店铺ID获取店铺信息（内部使用，不验证归属权）
+func (s *ShopService) GetShopByID(shopID uint64) (*models.Shop, error) {
+	var shop models.Shop
+	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {
+		return nil, utils.ErrShopNotFound
+	}
+	return &shop, nil
 }

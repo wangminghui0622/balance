@@ -19,14 +19,17 @@ import (
 // WebhookService Webhook服务
 type WebhookService struct {
 	db           *gorm.DB
+	shardedDB    *database.ShardedDB
 	orderService *shopower.OrderService
 	shopService  *shopower.ShopService
 }
 
 // NewWebhookService 创建Webhook服务
 func NewWebhookService() *WebhookService {
+	db := database.GetDB()
 	return &WebhookService{
-		db:           database.GetDB(),
+		db:           db,
+		shardedDB:    database.NewShardedDB(db),
 		orderService: shopower.NewOrderService(),
 		shopService:  shopower.NewShopService(),
 	}
@@ -86,10 +89,11 @@ func (s *WebhookService) CheckAndSetUpdateTime(ctx context.Context, shopID uint6
 	return true
 }
 
-// CanStatusTransition 检查状态转换是否合法
+// CanStatusTransition 检查状态转换是否合法 - 使用分表
 func (s *WebhookService) CanStatusTransition(ctx context.Context, shopID uint64, orderSN string, newStatus string) bool {
+	orderTable := database.GetOrderTableName(shopID)
 	var order models.Order
-	if err := s.db.Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&order).Error; err != nil {
+	if err := s.db.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&order).Error; err != nil {
 		return true
 	}
 
@@ -145,7 +149,8 @@ func (s *WebhookService) HandleOrderStatusUpdate(ctx context.Context, shopID uin
 
 	s.LogWebhook(ctx, shopID, consts.WebhookOrderStatus, "order_status", data)
 
-	if err := s.db.Model(&models.Order{}).
+	orderTable := database.GetOrderTableName(shopID)
+	if err := s.db.Table(orderTable).
 		Where("shop_id = ? AND order_sn = ?", shopID, orderData.OrderSN).
 		Update("order_status", orderData.Status).Error; err != nil {
 		s.logError(ctx, shopID, consts.WebhookOrderStatus, "update_error", err)
@@ -186,7 +191,8 @@ func (s *WebhookService) HandleTrackingUpdate(ctx context.Context, shopID uint64
 	s.LogWebhook(ctx, shopID, consts.WebhookTrackingUpdate, "tracking_update", data)
 
 	if trackingData.TrackingNumber != "" {
-		s.db.Model(&models.Shipment{}).
+		shipmentTable := database.GetShipmentTableName(shopID)
+		s.db.Table(shipmentTable).
 			Where("shop_id = ? AND order_sn = ?", shopID, trackingData.OrderSN).
 			Update("tracking_number", trackingData.TrackingNumber)
 	}
@@ -221,20 +227,66 @@ func (s *WebhookService) HandleOrderCancel(ctx context.Context, shopID uint64, d
 
 	s.LogWebhook(ctx, shopID, consts.WebhookBuyerCancelOrder, "order_cancel", data)
 
-	s.db.Model(&models.Order{}).
+	// 更新订单状态 - 使用分表
+	orderTable := database.GetOrderTableName(shopID)
+	s.db.Table(orderTable).
 		Where("shop_id = ? AND order_sn = ?", shopID, cancelData.OrderSN).
 		Update("order_status", consts.OrderStatusCancelled)
 
-	s.db.Model(&models.Shipment{}).
+	shipmentTable := database.GetShipmentTableName(shopID)
+	s.db.Table(shipmentTable).
 		Where("shop_id = ? AND order_sn = ?", shopID, cancelData.OrderSN).
 		Updates(map[string]interface{}{
 			"ship_status": consts.ShipStatusFailed,
 			"remark":      fmt.Sprintf("订单已取消: %s - %s", cancelData.CancelBy, cancelData.CancelReason),
 		})
 
+	// 处理预付款解冻 (如果订单已发货且有冻结金额)
+	s.handleOrderCancelRefund(ctx, shopID, cancelData.OrderSN, cancelData.CancelBy, cancelData.CancelReason)
+
 	rdb := database.GetRedis()
 	cacheKey := fmt.Sprintf(consts.KeyOrderStatus, shopID, cancelData.OrderSN)
 	rdb.Del(ctx, cacheKey)
+}
+
+// handleOrderCancelRefund 处理订单取消退款 - 使用分表
+func (s *WebhookService) handleOrderCancelRefund(ctx context.Context, shopID uint64, orderSN string, cancelBy string, cancelReason string) {
+	// 查找发货记录
+	shipmentRecordTable := database.GetOrderShipmentRecordTableName(shopID)
+	var shipmentRecord models.OrderShipmentRecord
+	err := s.db.Table(shipmentRecordTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&shipmentRecord).Error
+	if err != nil {
+		// 没有发货记录，无需处理
+		return
+	}
+
+	// 只处理已发货但未结算的订单
+	if shipmentRecord.Status != models.ShipmentRecordStatusShipped {
+		return
+	}
+
+	// 解冻预付款
+	accountService := NewAccountService()
+	_, err = accountService.UnfreezePrepayment(ctx, shipmentRecord.ShopOwnerID, shipmentRecord.FrozenAmount, orderSN,
+		fmt.Sprintf("订单取消退款: %s - %s", cancelBy, cancelReason))
+	if err != nil {
+		s.logError(ctx, shopID, consts.WebhookBuyerCancelOrder, "unfreeze_error", err)
+		return
+	}
+
+	// 从托管账户退回
+	err = accountService.TransferFromEscrow(ctx, shipmentRecord.FrozenAmount, orderSN, "订单取消退回")
+	if err != nil {
+		s.logError(ctx, shopID, consts.WebhookBuyerCancelOrder, "escrow_refund_error", err)
+	}
+
+	// 更新发货记录状态
+	s.db.Table(shipmentRecordTable).
+		Where("id = ?", shipmentRecord.ID).
+		Updates(map[string]interface{}{
+			"status": models.ShipmentRecordStatusCancelled,
+			"remark": fmt.Sprintf("订单取消: %s - %s", cancelBy, cancelReason),
+		})
 }
 
 // HandleReservedOrder 处理保留订单
@@ -242,10 +294,11 @@ func (s *WebhookService) HandleReservedOrder(ctx context.Context, shopID uint64,
 	s.LogWebhook(ctx, shopID, consts.WebhookReservedStock, "reserved_order", data)
 }
 
-// LogWebhook 记录Webhook日志
+// LogWebhook 记录Webhook日志 - 使用分表
 func (s *WebhookService) LogWebhook(ctx context.Context, shopID uint64, code int, eventType string, data any) {
 	dataJSON, _ := json.Marshal(data)
 
+	logTable := database.GetOperationLogTableName(shopID)
 	log := &models.OperationLog{
 		ShopID:        shopID,
 		OperationType: consts.OpTypeWebhook,
@@ -253,7 +306,7 @@ func (s *WebhookService) LogWebhook(ctx context.Context, shopID uint64, code int
 		Status:        consts.OpStatusSuccess,
 		CreatedAt:     time.Now(),
 	}
-	s.db.Create(log)
+	s.db.Table(logTable).Create(log)
 }
 
 func (s *WebhookService) refreshOrderDetail(shopID uint64, orderSN string) {
@@ -314,18 +367,20 @@ func (s *WebhookService) saveOrderFromWebhook(ctx context.Context, shopID uint64
 		order.CreateTime = &createTime
 	}
 
+	orderTable := database.GetOrderTableName(shopID)
 	var existing models.Order
-	if err := s.db.Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).First(&existing).Error; err == nil {
+	if err := s.db.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).First(&existing).Error; err == nil {
 		if !existing.StatusLocked {
 			order.ID = existing.ID
-			s.db.Save(&order)
+			s.db.Table(orderTable).Where("id = ?", order.ID).Updates(&order)
 		}
 	} else {
-		s.db.Create(&order)
+		s.db.Table(orderTable).Create(&order)
 	}
 }
 
 func (s *WebhookService) logError(ctx context.Context, shopID uint64, code int, errType string, err error) {
+	logTable := database.GetOperationLogTableName(shopID)
 	log := &models.OperationLog{
 		ShopID:        shopID,
 		OperationType: consts.OpTypeWebhook,
@@ -333,5 +388,5 @@ func (s *WebhookService) logError(ctx context.Context, shopID uint64, code int, 
 		Status:        consts.OpStatusFailed,
 		CreatedAt:     time.Now(),
 	}
-	s.db.Create(log)
+	s.db.Table(logTable).Create(log)
 }

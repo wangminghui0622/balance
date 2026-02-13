@@ -39,10 +39,10 @@ func main() {
 	defer database.CloseRedis()
 	log.Println("Redis连接成功")
 
-	// 启动定时同步调度器
-	syncScheduler := services.NewSyncScheduler(database.GetDB())
-	syncScheduler.Start()
-	defer syncScheduler.Stop()
+	// 启动分布式同步调度器（支持多实例部署）
+	distributedSyncScheduler := services.NewDistributedSyncScheduler(database.GetDB(), database.GetRedis())
+	distributedSyncScheduler.Start()
+	defer distributedSyncScheduler.Stop()
 
 	// 设置路由
 	r := router.SetupRouter(cfg.App.Mode)

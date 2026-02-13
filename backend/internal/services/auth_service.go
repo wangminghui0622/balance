@@ -86,13 +86,13 @@ func (s *AuthService) Register(ctx context.Context, req *RegisterRequest) error 
 
 	var existing models.Admin
 	if err := s.db.Where("user_name = ?", req.Username).First(&existing).Error; err == nil {
-		return errors.New("用户名已存在")
+		return utils.ErrUsernameExists
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return fmt.Errorf("查询用户失败: %w", err)
 	}
 
 	if err := s.db.Where("email = ?", req.Email).First(&existing).Error; err == nil {
-		return errors.New("邮箱已被注册")
+		return utils.ErrEmailExists
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return fmt.Errorf("查询邮箱失败: %w", err)
 	}
@@ -107,7 +107,7 @@ func (s *AuthService) Register(ctx context.Context, req *RegisterRequest) error 
 	case models.UserTypePlatform:
 		userID, err = s.idGenerator.GeneratePlatformID(ctx)
 	default:
-		return errors.New("无效的用户类型")
+		return utils.ErrInvalidUserType
 	}
 	if err != nil {
 		return fmt.Errorf("生成用户ID失败: %w", err)
@@ -145,17 +145,17 @@ func (s *AuthService) Login(ctx context.Context, req *LoginRequest, clientIP str
 	var admin models.Admin
 	if err := s.db.Where("user_name = ?", req.Username).First(&admin).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("用户名或密码错误")
+			return nil, utils.ErrInvalidCredential
 		}
 		return nil, fmt.Errorf("查询用户失败: %w", err)
 	}
 
 	if admin.IsDisabled() {
-		return nil, errors.New("账户已被禁用")
+		return nil, utils.ErrAccountDisabled
 	}
 
 	if !verifyPassword(req.Password, admin.Salt, admin.Hash) {
-		return nil, errors.New("用户名或密码错误")
+		return nil, utils.ErrInvalidCredential
 	}
 
 	now := time.Now()
@@ -181,7 +181,7 @@ func (s *AuthService) GetCurrentUser(ctx context.Context, userID int64) (*Curren
 	var admin models.Admin
 	if err := s.db.First(&admin, userID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("用户不存在")
+			return nil, utils.ErrUserNotFound
 		}
 		return nil, fmt.Errorf("查询用户失败: %w", err)
 	}
@@ -209,7 +209,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, req *ResetPasswordReque
 	var admin models.Admin
 	if err := s.db.Where("email = ?", req.Email).First(&admin).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errors.New("该邮箱未注册")
+			return utils.ErrEmailNotRegister
 		}
 		return fmt.Errorf("查询用户失败: %w", err)
 	}
@@ -289,5 +289,5 @@ func ParseToken(tokenString string) (*Claims, error) {
 		return claims, nil
 	}
 
-	return nil, errors.New("invalid token")
+	return nil, utils.ErrInvalidToken
 }

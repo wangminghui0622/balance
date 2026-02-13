@@ -274,9 +274,70 @@ CREATE TABLE `operation_logs` (
 2. **发货记录表** - 主要索引在 `ship_status` 上，用于查询待发货订单
 3. **操作日志表** - 建议定期归档，保留最近3个月数据
 
-## 分表策略建议
+## 分表策略（已实现）
 
-当订单量达到千万级别时，建议：
-1. `orders` 表按 `shop_id` 进行分表
-2. `order_items` 表随 `orders` 表同步分表
-3. `operation_logs` 表按时间（月份）进行分表
+系统已实现水平分表，共 **11种表 × 10个分表 = 110个分表**。
+
+### 分表规则
+
+| 表类型 | 分表规则 | 表名示例 |
+|--------|----------|----------|
+| 订单表 | `shop_id % 10` | `orders_0` ~ `orders_9` |
+| 订单商品表 | `shop_id % 10` | `order_items_0` ~ `order_items_9` |
+| 订单地址表 | `shop_id % 10` | `order_addresses_0` ~ `order_addresses_9` |
+| 订单结算明细表 | `shop_id % 10` | `order_escrows_0` ~ `order_escrows_9` |
+| 订单结算商品表 | `shop_id % 10` | `order_escrow_items_0` ~ `order_escrow_items_9` |
+| 订单结算记录表 | `shop_id % 10` | `order_settlements_0` ~ `order_settlements_9` |
+| 订单发货记录表 | `shop_id % 10` | `order_shipment_records_0` ~ `order_shipment_records_9` |
+| 发货记录表 | `shop_id % 10` | `shipments_0` ~ `shipments_9` |
+| 财务收入表 | `shop_id % 10` | `finance_incomes_0` ~ `finance_incomes_9` |
+| 账户流水表 | `admin_id % 10` | `account_transactions_0` ~ `account_transactions_9` |
+| 操作日志表 | `shop_id % 10` | `operation_logs_0` ~ `operation_logs_9` |
+
+### 分表路由工具
+
+使用 `internal/database/sharding.go` 中的工具函数进行分表路由：
+
+```go
+// 按 shop_id 分表
+database.GetOrderTableName(shopID)              // orders_X
+database.GetOrderItemTableName(shopID)          // order_items_X
+database.GetOrderAddressTableName(shopID)       // order_addresses_X
+database.GetOrderEscrowTableName(shopID)        // order_escrows_X
+database.GetOrderEscrowItemTableName(shopID)    // order_escrow_items_X
+database.GetOrderSettlementTableName(shopID)    // order_settlements_X
+database.GetOrderShipmentRecordTableName(shopID)// order_shipment_records_X
+database.GetShipmentTableName(shopID)           // shipments_X
+database.GetFinanceIncomeTableName(shopID)      // finance_incomes_X
+database.GetOperationLogTableName(shopID)       // operation_logs_X
+
+// 按 admin_id 分表
+database.GetAccountTransactionTableName(adminID) // account_transactions_X
+```
+
+### 查询示例
+
+```go
+// 单店铺查询 - 直接路由到对应分表
+orderTable := database.GetOrderTableName(shopID)
+db.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&order)
+
+// 多店铺查询 - 按分表索引分组，遍历查询后内存合并
+shardShops := make(map[int][]uint64)
+for _, sid := range shopIDs {
+    idx := database.GetShardIndex(sid)
+    shardShops[idx] = append(shardShops[idx], sid)
+}
+for idx, sids := range shardShops {
+    orderTable := fmt.Sprintf("orders_%d", idx)
+    db.Table(orderTable).Where("shop_id IN ?", sids).Find(&orders)
+    // 合并结果...
+}
+```
+
+### 注意事项
+
+1. **同一店铺的数据在同一组分表中** - 便于事务处理和关联查询
+2. **跨店铺查询需要遍历分表** - 平台级统计查询需要遍历所有分表
+3. **分页使用内存分页** - 跨分表查询时，先获取所有数据再内存分页
+4. **账户流水按 admin_id 分表** - 同一用户的流水在同一表中

@@ -112,17 +112,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { operatorAccountApi } from '@share/api/account'
+import { operatorSettlementApi } from '@share/api/settlement'
 
 const loading = ref(false)
 const activeTab = ref('all')
 
 const summaryData = reactive({
-  withdrawable: 5450,
-  totalPayment: 44543,
-  upcoming: 123
+  withdrawable: 0,
+  totalPayment: 0,
+  upcoming: 0
 })
 
 const filterForm = reactive({
@@ -131,36 +133,91 @@ const filterForm = reactive({
   endDate: null as Date | null
 })
 
-const paymentList = ref([
-  { date: '2026-12-12 23:59:59', transType: '回款收入', storeId: 'S1234567890', orderNo: 'X250904KQ2P078R', amount: 1000, balance: 223560.50, status: '已结算' },
-  { date: '2026-12-12 23:59:59', transType: '回款收入', storeId: 'S1234567890', orderNo: 'X250904KQ2P078R', amount: 1000, balance: 223560.50, status: '已结算' },
-  { date: '2026-12-12 23:59:59', transType: '回款收入', storeId: 'S1234567890', orderNo: 'X250904KQ2P078R', amount: 1000, balance: 223560.50, status: '已结算' },
-  { date: '2026-12-12 23:59:59', transType: '回款收入', storeId: 'S1234567890', orderNo: 'X250904KQ2P078R', amount: 1000, balance: 223560.50, status: '已结算' },
-  { date: '2026-12-12 23:59:59', transType: '回款收入', storeId: 'S1234567890', orderNo: 'X250904KQ2P078R', amount: 1000, balance: 223560.50, status: '已结算' },
-  { date: '2026-12-12 23:59:59', transType: '回款收入', storeId: 'S1234567890', orderNo: 'X250904KQ2P078R', amount: 1000, balance: 223560.50, status: '已结算' },
-  { date: '2026-12-12 23:59:59', transType: '回款收入', storeId: 'S1234567890', orderNo: 'X250904KQ2P078R', amount: 1000, balance: 223560.50, status: '已结算' },
-  { date: '2026-12-12 23:59:59', transType: '回款收入', storeId: 'S1234567890', orderNo: 'X250904KQ2P078R', amount: 1000, balance: 223560.50, status: '已结算' },
-  { date: '2026-12-12 23:59:59', transType: '回款收入', storeId: 'S1234567890', orderNo: 'X250904KQ2P078R', amount: 1000, balance: 223560.50, status: '已结算' },
-  { date: '2026-12-12 23:59:59', transType: '回款收入', storeId: 'S1234567890', orderNo: 'X250904KQ2P078R', amount: 1000, balance: 223560.50, status: '已结算' }
-])
+const pagination = reactive({
+  page: 1,
+  pageSize: 10,
+  total: 0
+})
+
+interface PaymentRecord {
+  date: string
+  transType: string
+  storeId: string
+  orderNo: string
+  amount: number
+  balance: number
+  status: string
+}
+
+const paymentList = ref<PaymentRecord[]>([])
+
+async function fetchAccountInfo() {
+  try {
+    const res = await operatorAccountApi.getAccount()
+    if (res.code === 0 && res.data) {
+      summaryData.withdrawable = parseFloat(res.data.balance) || 0
+      summaryData.totalPayment = parseFloat(res.data.total_earnings) || 0
+    }
+  } catch (error) {
+    console.error('获取账户信息失败', error)
+  }
+}
+
+async function fetchSettlementStats() {
+  try {
+    const res = await operatorSettlementApi.getSettlementStats()
+    if (res.code === 0 && res.data) {
+      summaryData.upcoming = parseFloat(res.data.total_pending as any) || 0
+    }
+  } catch (error) {
+    console.error('获取结算统计失败', error)
+  }
+}
+
+async function fetchTransactions() {
+  loading.value = true
+  try {
+    const res = await operatorAccountApi.getTransactions({
+      page: pagination.page,
+      page_size: pagination.pageSize
+    })
+    if (res.code === 0 && res.data) {
+      paymentList.value = res.data.list.map((item: any) => ({
+        date: item.created_at,
+        transType: item.transaction_type === 'profit_share' ? '回款收入' : item.transaction_type,
+        storeId: '-',
+        orderNo: item.related_order_sn || '-',
+        amount: parseFloat(item.amount) || 0,
+        balance: parseFloat(item.balance_after) || 0,
+        status: '已结算'
+      }))
+      pagination.total = res.data.total
+    }
+  } catch (error) {
+    console.error('获取交易记录失败', error)
+  } finally {
+    loading.value = false
+  }
+}
 
 function handleWithdraw() {
   ElMessage.info('提现功能开发中...')
 }
 
-const pagination = reactive({
-  page: 1,
-  pageSize: 10,
-  total: 68
+watch(activeTab, () => {
+  pagination.page = 1
+  fetchTransactions()
+})
+
+onMounted(() => {
+  fetchAccountInfo()
+  fetchSettlementStats()
+  fetchTransactions()
 })
 
 function formatAmount(value: number): string {
   return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
-
-onMounted(() => {
-  // 加载数据
-})
 </script>
 
 <style scoped lang="scss">

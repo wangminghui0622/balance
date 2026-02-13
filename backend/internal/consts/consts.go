@@ -188,6 +188,18 @@ const (
 	RouteShopowerShipmentLogistics     = "/shipments/logistics/:shop_id"
 )
 
+const (
+	RouteShopowerEscrows      = "/escrows"
+	RouteShopowerEscrowSync   = "/escrows/:shop_id/:order_sn/sync"
+	RouteShopowerEscrowDetail = "/escrows/:shop_id/:order_sn"
+)
+
+const (
+	RouteShopowerFinances     = "/finances"
+	RouteShopowerFinanceSync  = "/finances/:shop_id/sync"
+	RouteShopowerFinanceStats = "/finances/:shop_id/stats"
+)
+
 // ==================== 运营路由 (operator) ====================
 
 const (
@@ -206,6 +218,12 @@ const (
 	RoutePlatformUsers      = "/users"
 	RoutePlatformUserDetail = "/users/:user_id"
 	RoutePlatformUserStatus = "/users/:user_id/status"
+)
+
+const (
+	RoutePlatformSyncStats       = "/sync/stats"
+	RoutePlatformSyncRecords     = "/sync/records"
+	RoutePlatformSyncRecordReset = "/sync/records/:shop_id/reset"
 )
 
 const (

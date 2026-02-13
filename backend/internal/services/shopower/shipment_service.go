@@ -9,6 +9,7 @@ import (
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
 	"balance/backend/internal/shopee"
+	"balance/backend/internal/utils"
 
 	"gorm.io/gorm"
 )
@@ -32,13 +33,16 @@ type BatchShipResult struct {
 // ShipmentService 发货服务（店主专用）
 type ShipmentService struct {
 	db          *gorm.DB
+	shardedDB   *database.ShardedDB
 	shopService *ShopService
 }
 
 // NewShipmentService 创建发货服务
 func NewShipmentService() *ShipmentService {
+	db := database.GetDB()
 	return &ShipmentService{
-		db:          database.GetDB(),
+		db:          db,
+		shardedDB:   database.NewShardedDB(db),
 		shopService: NewShopService(),
 	}
 }
@@ -54,7 +58,7 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *Shi
 		return fmt.Errorf("获取发货锁失败: %w", err)
 	}
 	if !ok {
-		return fmt.Errorf("订单正在发货中，请勿重复操作")
+		return utils.ErrOrderShipping
 	}
 	defer rdb.Del(ctx, lockKey)
 
@@ -63,9 +67,10 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *Shi
 		return err
 	}
 
-	// 检查订单状态
+	// 检查订单状态 - 使用分表
+	orderTable := database.GetOrderTableName(uint64(req.ShopID))
 	var order models.Order
-	if err := s.db.Where("shop_id = ? AND order_sn = ?", req.ShopID, req.OrderSN).First(&order).Error; err != nil {
+	if err := s.db.Table(orderTable).Where("shop_id = ? AND order_sn = ?", req.ShopID, req.OrderSN).First(&order).Error; err != nil {
 		return fmt.Errorf("订单不存在: %w", err)
 	}
 	if !order.CanShip() {
@@ -79,7 +84,8 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *Shi
 
 	client := shopee.NewClient(shop.Region)
 
-	// 创建发货记录
+	// 创建发货记录 - 使用分表
+	shipmentTable := database.GetShipmentTableName(uint64(req.ShopID))
 	now := time.Now()
 	shipment := models.Shipment{
 		ShopID:          uint64(req.ShopID),
@@ -88,9 +94,14 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *Shi
 		TrackingNumber:  "",
 		ShipStatus:      consts.ShipStatusPending,
 	}
-	if err := s.db.Where("shop_id = ? AND order_sn = ?", req.ShopID, req.OrderSN).
-		Assign(shipment).FirstOrCreate(&shipment).Error; err != nil {
-		return fmt.Errorf("创建发货记录失败: %w", err)
+	var existingShipment models.Shipment
+	if err := s.db.Table(shipmentTable).Where("shop_id = ? AND order_sn = ?", req.ShopID, req.OrderSN).First(&existingShipment).Error; err == nil {
+		shipment.ID = existingShipment.ID
+		s.db.Table(shipmentTable).Where("id = ?", shipment.ID).Updates(&shipment)
+	} else {
+		if err := s.db.Table(shipmentTable).Create(&shipment).Error; err != nil {
+			return fmt.Errorf("创建发货记录失败: %w", err)
+		}
 	}
 
 	// 调用Shopee API发货
@@ -105,8 +116,8 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *Shi
 		shipment.ShipStatus = consts.ShipStatusShipped
 		shipment.ShipTime = &now
 
-		// 更新订单状态
-		s.db.Model(&models.Order{}).
+		// 更新订单状态 - 使用分表
+		s.db.Table(orderTable).
 			Where("shop_id = ? AND order_sn = ?", req.ShopID, req.OrderSN).
 			Updates(map[string]interface{}{
 				"order_status": consts.OrderStatusProcessed,
@@ -117,7 +128,7 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *Shi
 		rdb.Set(ctx, statusKey, consts.OrderStatusProcessed, consts.OrderStatusExpire)
 	}
 
-	s.db.Save(&shipment)
+	s.db.Table(shipmentTable).Where("id = ?", shipment.ID).Updates(&shipment)
 
 	// 记录操作日志
 	s.logOperation(uint64(req.ShopID), req.OrderSN, consts.OpTypeOrderShip, "订单发货", logStatus)
@@ -130,6 +141,7 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *Shi
 }
 
 func (s *ShipmentService) logOperation(shopID uint64, orderSN, opType, opDesc string, status int8) {
+	logTable := database.GetOperationLogTableName(shopID)
 	log := models.OperationLog{
 		ShopID:        shopID,
 		OrderSN:       orderSN,
@@ -137,13 +149,13 @@ func (s *ShipmentService) logOperation(shopID uint64, orderSN, opType, opDesc st
 		OperationDesc: opDesc,
 		Status:        status,
 	}
-	s.db.Create(&log)
+	s.db.Table(logTable).Create(&log)
 }
 
 func (s *ShipmentService) getAccessToken(ctx context.Context, shopID uint64) (string, error) {
 	var auth models.ShopAuthorization
 	if err := s.db.Where("shop_id = ?", shopID).First(&auth).Error; err != nil {
-		return "", fmt.Errorf("店铺未授权")
+		return "", utils.ErrShopUnauthorized
 	}
 	if auth.IsAccessTokenExpired() {
 		if err := s.shopService.RefreshToken(ctx, shopID); err != nil {
@@ -207,43 +219,74 @@ func (s *ShipmentService) GetTrackingNumber(ctx context.Context, adminID int64, 
 	return resp.Response.TrackingNumber, nil
 }
 
-// ListShipments 获取发货记录列表
+// ListShipments 获取发货记录列表 - 使用分表
 func (s *ShipmentService) ListShipments(ctx context.Context, adminID int64, shopID int64, page, pageSize int) ([]models.Shipment, int64, error) {
-	var shipments []models.Shipment
-	var total int64
-
 	var shopIDs []uint64
 	s.db.Model(&models.Shop{}).Where("admin_id = ?", adminID).Pluck("shop_id", &shopIDs)
 	if len(shopIDs) == 0 {
 		return []models.Shipment{}, 0, nil
 	}
 
-	query := s.db.Model(&models.Shipment{}).Where("shop_id IN ?", shopIDs)
+	// 如果指定了shopID，直接查询对应分表
 	if shopID > 0 {
-		query = query.Where("shop_id = ?", shopID)
+		shipmentTable := database.GetShipmentTableName(uint64(shopID))
+		var shipments []models.Shipment
+		var total int64
+
+		query := s.db.Table(shipmentTable).Where("shop_id = ?", shopID)
+		query.Count(&total)
+
+		offset := (page - 1) * pageSize
+		query.Offset(offset).Limit(pageSize).Order("id DESC").Find(&shipments)
+		return shipments, total, nil
 	}
 
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
+	// 按分表索引分组店铺
+	shardShops := make(map[int][]uint64)
+	for _, sid := range shopIDs {
+		idx := database.GetShardIndex(sid)
+		shardShops[idx] = append(shardShops[idx], sid)
 	}
 
+	var allShipments []models.Shipment
+	var total int64
+
+	for idx, sids := range shardShops {
+		shipmentTable := fmt.Sprintf("shipments_%d", idx)
+		query := s.db.Table(shipmentTable).Where("shop_id IN ?", sids)
+
+		var count int64
+		query.Count(&count)
+		total += count
+
+		var shipments []models.Shipment
+		query.Order("id DESC").Find(&shipments)
+		allShipments = append(allShipments, shipments...)
+	}
+
+	// 内存分页
 	offset := (page - 1) * pageSize
-	if err := query.Offset(offset).Limit(pageSize).Order("id DESC").Find(&shipments).Error; err != nil {
-		return nil, 0, err
+	end := offset + pageSize
+	if offset >= len(allShipments) {
+		return []models.Shipment{}, total, nil
+	}
+	if end > len(allShipments) {
+		end = len(allShipments)
 	}
 
-	return shipments, total, nil
+	return allShipments[offset:end], total, nil
 }
 
-// GetShipment 获取发货详情
+// GetShipment 获取发货详情 - 使用分表
 func (s *ShipmentService) GetShipment(ctx context.Context, adminID int64, shopID int64, orderSN string) (*models.Shipment, error) {
 	if _, err := s.shopService.GetShop(ctx, adminID, shopID); err != nil {
 		return nil, err
 	}
 
+	shipmentTable := database.GetShipmentTableName(uint64(shopID))
 	var shipment models.Shipment
-	if err := s.db.Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&shipment).Error; err != nil {
-		return nil, fmt.Errorf("发货记录不存在")
+	if err := s.db.Table(shipmentTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&shipment).Error; err != nil {
+		return nil, utils.ErrShipmentNotFound
 	}
 	return &shipment, nil
 }

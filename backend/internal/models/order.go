@@ -8,7 +8,7 @@ import (
 
 // Order 订单模型
 type Order struct {
-	ID              uint64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID              uint64          `gorm:"primaryKey" json:"id"`
 	ShopID          uint64          `gorm:"not null;uniqueIndex:uk_shop_order" json:"shop_id"`
 	OrderSN         string          `gorm:"size:64;not null;uniqueIndex:uk_shop_order;index" json:"order_sn"`
 	Region          string          `gorm:"size:10;not null" json:"region"`
@@ -50,7 +50,7 @@ func (o *Order) CanShip() bool {
 
 // OrderItem 订单商品模型
 type OrderItem struct {
-	ID        uint64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID        uint64          `gorm:"primaryKey" json:"id"`
 	OrderID   uint64          `gorm:"not null;index" json:"order_id"`
 	ShopID    uint64          `gorm:"not null;index:idx_shop_order" json:"shop_id"`
 	OrderSN   string          `gorm:"size:64;not null;index:idx_shop_order" json:"order_sn"`
@@ -73,7 +73,7 @@ func (OrderItem) TableName() string {
 
 // OrderAddress 订单收货地址模型
 type OrderAddress struct {
-	ID          uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID          uint64    `gorm:"primaryKey" json:"id"`
 	OrderID     uint64    `gorm:"uniqueIndex;not null" json:"order_id"`
 	ShopID      uint64    `gorm:"not null;index:idx_shop_order" json:"shop_id"`
 	OrderSN     string    `gorm:"size:64;not null;index:idx_shop_order" json:"order_sn"`

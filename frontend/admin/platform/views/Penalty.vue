@@ -99,6 +99,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { Search } from '@element-plus/icons-vue'
+import { platformPenaltyApi } from '@share/api/platform'
 
 interface Transaction {
   date: string
@@ -118,36 +119,50 @@ const dateRange = ref<string[]>(['2025-09-01', '2025-09-10'])
 const loading = ref(false)
 
 const summaryData = reactive({
-  balance: '5,450.00'
+  balance: '0.00'
 })
 
 const pagination = reactive({
   page: 1,
   pageSize: 10,
-  total: 123
+  total: 0
 })
 
 const transactionList = ref<Transaction[]>([])
 
+const fetchPenaltyStats = async () => {
+  try {
+    const res = await platformPenaltyApi.getPenaltyStats()
+    if (res.code === 0 && res.data) {
+      summaryData.balance = res.data.balance || '0.00'
+    }
+  } catch (err) {
+    console.error('获取罚补统计失败:', err)
+  }
+}
+
 const fetchTransactions = async () => {
   loading.value = true
   try {
-    // 模拟数据
-    const types = ['充值', '提现', '罚款', '补贴']
-    const roles = ['店主', '运营']
-    const names = ['张小婉', '李玉豪', '张启发', '周婉瑜']
-    transactionList.value = Array.from({ length: 10 }, (_, i) => ({
-      date: '2026-12-12 23:59:59',
-      role: roles[i % 2],
-      name: names[i % 4],
-      type: types[i % 4],
-      channel: '文字占位符占位符',
-      orderNo: 'X250904KQ2P078R',
-      amount: '1,000.00',
-      balance: '223,560.50',
-      status: '已完成'
-    }))
-    pagination.total = 123
+    const res = await platformPenaltyApi.getPenaltyList({
+      type: activeTab.value === 'all' ? undefined : activeTab.value,
+      page: pagination.page,
+      page_size: pagination.pageSize
+    })
+    if (res.code === 0 && res.data) {
+      transactionList.value = res.data.list.map((item: any) => ({
+        date: item.date,
+        role: item.role,
+        name: item.name,
+        type: item.type,
+        channel: item.channel,
+        orderNo: item.order_no,
+        amount: item.amount,
+        balance: item.balance,
+        status: item.status
+      }))
+      pagination.total = res.data.total
+    }
   } catch (err) {
     console.error('获取交易列表失败:', err)
   } finally {
@@ -182,6 +197,7 @@ const handlePageChange = (page: number) => {
 }
 
 onMounted(() => {
+  fetchPenaltyStats()
   fetchTransactions()
 })
 </script>

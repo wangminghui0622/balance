@@ -530,6 +530,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { Search, Download, Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { platformFinanceAuditApi } from '@share/api/platform'
 
 interface AuditRecord {
   date: string
@@ -601,32 +602,65 @@ const pagination = reactive({
 
 const auditList = ref<AuditRecord[]>([])
 
+const fetchAuditStats = async () => {
+  try {
+    const res = await platformFinanceAuditApi.getAuditStats(activeMainTab.value)
+    if (res.code === 0 && res.data) {
+      summaryData.pending = res.data.pending || 0
+      summaryData.approved = res.data.approved || 0
+      summaryData.avgTime = res.data.avg_time || '0:00'
+      summaryData.timePercent = res.data.time_percent || 0
+    }
+  } catch (err) {
+    console.error('获取审核统计失败:', err)
+  }
+}
+
 const fetchAuditList = async () => {
   loading.value = true
   try {
-    // 模拟数据
-    const types = ['佣金', '店主预付款', '保证金', '运营回款']
-    const roles = ['店主', '运营', '平台']
-    const names = ['占位符', '占位符', '占位符']
-    const rechargeTypes = ['店主预付款', '店主保证金', '运营保证金', '店主预付款']
-    const channels = ['线上充值', '线下充值']
-    const statuses = ['待审批', '待审批', '已审批', '待审批', '待审批', '已拒绝', '待审批']
-    auditList.value = Array.from({ length: 10 }, (_, i) => ({
-      date: '2026-12-12 23:59:59',
-      roleType: roles[i % 3],
-      name: names[i % 3],
-      withdrawType: types[i % 4],
-      account: '3456789456789',
-      amount: '223,560.50',
-      status: statuses[i % 7],
-      transactionType: '预付款充值',
-      transactionChannel: channels[i % 2],
-      transactionNo: '3456789456789',
-      rechargeType: rechargeTypes[i % 4],
-      transferType: '转存预付款',
-      transferChannel: '店主佣金余额'
-    }))
-    pagination.total = 123
+    let res
+    if (activeMainTab.value === 'withdraw') {
+      res = await platformFinanceAuditApi.getWithdrawAuditList({
+        status: filterForm.auditStatus || undefined,
+        keyword: filterForm.keyword || undefined,
+        withdraw_type: filterForm.withdrawType || undefined,
+        page: pagination.page,
+        page_size: pagination.pageSize
+      })
+    } else if (activeMainTab.value === 'recharge') {
+      res = await platformFinanceAuditApi.getRechargeAuditList({
+        status: filterForm.auditStatus || undefined,
+        page: pagination.page,
+        page_size: pagination.pageSize
+      })
+    } else {
+      // 转存审核暂无
+      auditList.value = []
+      pagination.total = 0
+      loading.value = false
+      return
+    }
+
+    if (res && res.code === 0 && res.data) {
+      auditList.value = res.data.list.map((item: any) => ({
+        id: item.id,
+        date: item.created_at,
+        roleType: item.account_type === 'prepayment' ? '店主' : item.account_type === 'operator' ? '运营' : '平台',
+        name: item.username || '-',
+        withdrawType: item.account_type === 'prepayment' ? '店主预付款' : item.account_type === 'deposit' ? '保证金' : '运营回款',
+        account: '-',
+        amount: item.amount || '0',
+        status: item.status_text || (item.status === 0 ? '待审批' : item.status === 1 ? '已审批' : '已拒绝'),
+        transactionType: item.transaction_type || '-',
+        transactionChannel: '-',
+        transactionNo: item.transaction_no || '-',
+        rechargeType: item.account_type === 'prepayment' ? '店主预付款' : item.account_type === 'deposit' ? '店主保证金' : '运营保证金',
+        transferType: '-',
+        transferChannel: '-'
+      }))
+      pagination.total = res.data.total
+    }
   } catch (err) {
     console.error('获取审核列表失败:', err)
   } finally {
@@ -700,6 +734,7 @@ const handleApprove = () => {
 }
 
 onMounted(() => {
+  fetchAuditStats()
   fetchAuditList()
 })
 </script>

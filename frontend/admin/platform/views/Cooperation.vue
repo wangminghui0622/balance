@@ -288,6 +288,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { Search, Download, Plus } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
+import { platformCooperationApi } from '@share/api/platform'
 
 interface Cooperation {
   date: string
@@ -352,21 +353,41 @@ const cooperationList = ref<Cooperation[]>([])
 const fetchCooperations = async () => {
   loading.value = true
   try {
-    // 模拟数据
-    cooperationList.value = Array.from({ length: 10 }, (_, i) => ({
-      date: '2026-12-12 23:59:59',
-      status: i % 3 === 1 ? '已取消' : '合作中',
-      ownerName: '店主名称',
-      storeId: 'S1234567890',
-      storeName: '示例文字示例文字占位符替换即可...',
-      operator: '文字占位符',
-      shareRatio: '文字占位符'
-    }))
-    pagination.total = 123
+    const res = await platformCooperationApi.getCooperations({
+      page: pagination.page,
+      page_size: pagination.pageSize,
+      keyword: filterForm.keyword || undefined,
+      status: filterForm.status ? parseInt(filterForm.status) : undefined
+    })
+    if (res.code === 0 && res.data) {
+      cooperationList.value = res.data.list.map((item: any) => ({
+        date: item.created_at,
+        status: item.status === 1 ? '合作中' : item.status === 2 ? '暂停' : '已取消',
+        ownerName: item.shop_owner_name || '-',
+        storeId: String(item.shop_id),
+        storeName: item.shop_name || '-',
+        operator: item.operator_name || '-',
+        shareRatio: `${item.shop_owner_ratio || 0}:${item.platform_ratio || 0}:${item.operator_ratio || 0}`
+      }))
+      pagination.total = res.data.total
+    }
   } catch (err) {
     console.error('获取合作列表失败:', err)
   } finally {
     loading.value = false
+  }
+}
+
+const fetchCooperationStats = async () => {
+  try {
+    const res = await platformCooperationApi.getCooperationStats()
+    if (res.code === 0 && res.data) {
+      summaryData.total = res.data.total || 0
+      summaryData.active = res.data.active || 0
+      summaryData.cancelled = res.data.cancelled || 0
+    }
+  } catch (err) {
+    console.error('获取合作统计失败:', err)
   }
 }
 
@@ -450,6 +471,7 @@ const handleCancelCooperation = () => {
 }
 
 onMounted(() => {
+  fetchCooperationStats()
   fetchCooperations()
 })
 </script>

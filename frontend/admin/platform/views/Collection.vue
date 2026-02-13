@@ -110,9 +110,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { CircleCheckFilled, Plus, CreditCard } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { platformCollectionApi } from '@share/api/platform'
 
 interface Wallet {
   id: number
@@ -132,31 +133,42 @@ interface Bank {
   isDefault: boolean
 }
 
-const wallets = ref<Wallet[]>([
-  {
-    id: 1,
-    name: 'PayPal支付>',
-    status: '连接',
-    account: '12345678910121314​15',
-    payee: '123456789101',
-    isDefault: true
-  }
-])
+const wallets = ref<Wallet[]>([])
+const banks = ref<Bank[]>([])
 
-const banks = ref<Bank[]>([
-  {
-    id: 1,
-    name: '汇丰银行>',
-    status: '未激活',
-    account: '12345678910121314​15',
-    currency: 'CNY',
-    isDefault: false
+const fetchCollectionAccounts = async () => {
+  try {
+    const res = await platformCollectionApi.getCollectionAccounts()
+    if (res.code === 0 && res.data) {
+      wallets.value = (res.data.wallets || []).map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        status: item.status,
+        account: item.account,
+        payee: item.payee,
+        isDefault: item.is_default
+      }))
+      banks.value = (res.data.banks || []).map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        status: item.status,
+        account: item.account,
+        currency: 'TWD',
+        isDefault: item.is_default
+      }))
+    }
+  } catch (err) {
+    console.error('获取收款账户失败:', err)
   }
-])
+}
 
 const handleAddBank = () => {
   ElMessage.info('新增银行账号功能开发中')
 }
+
+onMounted(() => {
+  fetchCollectionAccounts()
+})
 </script>
 
 <style lang="scss" scoped>

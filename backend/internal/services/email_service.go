@@ -9,6 +9,7 @@ import (
 
 	"balance/backend/internal/config"
 	"balance/backend/internal/database"
+	"balance/backend/internal/utils"
 
 	"gopkg.in/gomail.v2"
 )
@@ -105,11 +106,11 @@ func (s *EmailService) VerifyCode(ctx context.Context, email, code string) error
 	codeKey := EmailCodeKeyPrefix + email
 	storedCode, err := rdb.Get(ctx, codeKey).Result()
 	if err != nil {
-		return fmt.Errorf("验证码已过期或不存在")
+		return utils.ErrEmailCodeExpired
 	}
 
 	if storedCode != code {
-		return fmt.Errorf("验证码错误")
+		return utils.ErrEmailCodeInvalid
 	}
 
 	// 验证成功后删除验证码

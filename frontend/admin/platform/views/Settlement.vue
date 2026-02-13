@@ -298,6 +298,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { Search, Download } from '@element-plus/icons-vue'
+import { platformSettlementApi } from '@share/api/platform'
 
 interface Product {
   name: string
@@ -381,15 +382,28 @@ const adjustList = ref<AdjustRecord[]>([
 ])
 
 const summaryData = reactive({
-  unsettledCount: 101,
-  unsettledAmount: '38,420.00',
-  settledCount: 12,
-  settledAmount: '456.00',
-  adjustCount: 12,
-  adjustAmount: '456.00',
-  totalCount: 150,
-  totalAmount: '34.00'
+  unsettledCount: 0,
+  unsettledAmount: '0.00',
+  settledCount: 0,
+  settledAmount: '0.00',
+  adjustCount: 0,
+  adjustAmount: '0.00',
+  totalCount: 0,
+  totalAmount: '0.00'
 })
+
+// 获取结算统计
+async function fetchSettlementStats() {
+  try {
+    const res = await platformSettlementApi.getSettlementStats()
+    if (res.code === 0 && res.data) {
+      summaryData.settledAmount = res.data.total_settled || '0.00'
+      summaryData.unsettledCount = res.data.total_pending || 0
+    }
+  } catch (error) {
+    console.error('获取结算统计失败', error)
+  }
+}
 
 const filterForm = reactive({
   owner: '',
@@ -413,61 +427,28 @@ const orderList = ref<OrderRecord[]>([])
 const fetchOrderList = async () => {
   loading.value = true
   try {
-    orderList.value = [
-      {
-        orderNo: 'X250904KQ2P078R',
-        payStatus: '付款状态',
-        orderTime: '2025-12-10 23:59:59',
-        storeNo: 'S1234567890',
-        storeName: '示例文字占位符示例文...',
-        shopeeOrderNo: '250904KQ2P078R',
-        shopeeStatus: '待发货',
-        commissionLabel: '未结算佣金',
-        commission: '8.00',
-        amount: '36.00',
-        shopeeAmount: '46.00',
-        products: [
-          { name: '商品名称示例文字占位符替换即可文字占位符替换即可', color: 'xxx', size: 'xxx', price: '46.00', qty: 1, subtotal: '46.00' }
-        ],
+    const res = await platformSettlementApi.getSettlements({
+      page: pagination.page,
+      page_size: pagination.pageSize
+    })
+    if (res.code === 0 && res.data) {
+      orderList.value = res.data.list.map((item: any) => ({
+        orderNo: item.order_sn,
+        payStatus: item.status === 1 ? '已结算' : '待结算',
+        orderTime: item.created_at,
+        storeNo: String(item.shop_id),
+        storeName: '-',
+        shopeeOrderNo: item.order_sn,
+        shopeeStatus: item.status === 1 ? '已完成' : '待发货',
+        commissionLabel: item.status === 1 ? '已结算佣金' : '未结算佣金',
+        commission: item.platform_share || '0',
+        amount: item.escrow_amount || '0',
+        shopeeAmount: item.escrow_amount || '0',
+        products: [],
         selected: false
-      },
-      {
-        orderNo: 'X250904KQ2P078R',
-        payStatus: '付款状态',
-        orderTime: '2025-12-10 23:59:59',
-        storeNo: 'S1234567890',
-        storeName: '示例文字占位符示例文...',
-        shopeeOrderNo: '250904KQ2P078R',
-        shopeeStatus: '已完成',
-        commissionLabel: '已结算佣金',
-        commission: '16.00',
-        amount: '198.00',
-        shopeeAmount: '208.00',
-        products: [
-          { name: '商品名称示例文字占位符替换即可文字占位符替换即可', color: 'xxx', size: 'xxx', price: '46.00', qty: 2, subtotal: '92.00' },
-          { name: '商品名称示例文字占位符替换即可文字占位符替换即可', color: 'xxx', size: 'xxx', price: '116.00', qty: 1, subtotal: '116.00' }
-        ],
-        selected: false
-      },
-      {
-        orderNo: 'X250904KQ2P078R',
-        payStatus: '付款状态',
-        orderTime: '2025-12-10 23:59:59',
-        storeNo: 'S1234567890',
-        storeName: '示例文字占位符示例文...',
-        shopeeOrderNo: '250904KQ2P078R',
-        shopeeStatus: '待发货',
-        commissionLabel: '未结算佣金',
-        commission: '8.00',
-        amount: '36.00',
-        shopeeAmount: '46.00',
-        products: [
-          { name: '商品名称示例文字占位符替换即可文字占位符替换即可', color: 'xxx', size: 'xxx', price: '46.00', qty: 1, subtotal: '46.00' }
-        ],
-        selected: false
-      }
-    ]
-    pagination.total = 123
+      }))
+      pagination.total = res.data.total
+    }
   } catch (err) {
     console.error('获取订单列表失败:', err)
   } finally {
@@ -540,6 +521,7 @@ const handleExecuteAdjust = () => {
 }
 
 onMounted(() => {
+  fetchSettlementStats()
   fetchOrderList()
 })
 </script>

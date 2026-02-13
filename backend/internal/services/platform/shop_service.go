@@ -7,6 +7,7 @@ import (
 	"balance/backend/internal/consts"
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
+	"balance/backend/internal/utils"
 
 	"gorm.io/gorm"
 )
@@ -69,7 +70,7 @@ func (s *ShopService) ListShops(ctx context.Context, ownerID int64, keyword, sta
 func (s *ShopService) GetShop(ctx context.Context, shopID int64) (*models.Shop, error) {
 	var shop models.Shop
 	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {
-		return nil, fmt.Errorf("店铺不存在")
+		return nil, utils.ErrShopNotFound
 	}
 	return &shop, nil
 }
@@ -78,7 +79,7 @@ func (s *ShopService) GetShop(ctx context.Context, shopID int64) (*models.Shop, 
 func (s *ShopService) UpdateShopStatus(ctx context.Context, shopID int64, status int) error {
 	result := s.db.Model(&models.Shop{}).Where("shop_id = ?", shopID).Update("status", status)
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("店铺不存在")
+		return utils.ErrShopNotFound
 	}
 	return result.Error
 }

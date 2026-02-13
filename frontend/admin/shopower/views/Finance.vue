@@ -102,9 +102,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { shopowerSettlementApi } from '@share/api/settlement'
 
 interface FinanceOrder {
 	date: string
@@ -116,115 +117,65 @@ interface FinanceOrder {
 	commission: string
 }
 
+const loading = ref(false)
 const activeTab = ref('unsettled')
 const searchKeyword = ref('')
 
 const summaryData = reactive({
-	unsettledCommission: 245,
-	settledCommission: 123.00,
-	adjustment: 123.00,
-	totalCommission: 123456.00
+	unsettledCommission: 0,
+	settledCommission: 0,
+	adjustment: 0,
+	totalCommission: 0
 })
 
 const pagination = reactive({
 	page: 1,
 	pageSize: 10,
-	total: 92
+	total: 0
 })
 
-// Mock数据
-const orders = ref<FinanceOrder[]>([
-	{
-		date: '2026-12-12 23:59:59',
-		storeId: '5123456789o',
-		orderNo: 'X25090a4KQ2Po78R',
-		orderStatus: '待发货',
-		countdown: '1天 03:23:42',
-		orderAmount: '6338.00',
-		commission: '8333.00'
-	},
-	{
-		date: '2026-12-12 23:59:59',
-		storeId: '5123456789o',
-		orderNo: 'X25090a4KQ2Po78R',
-		orderStatus: '待发货',
-		countdown: '1天 03:23:42',
-		orderAmount: '68.00',
-		commission: '8.00'
-	},
-	{
-		date: '2026-12-12 23:59:59',
-		storeId: '5123456789o',
-		orderNo: 'X25090a4KQ2Po78R',
-		orderStatus: '待发货',
-		countdown: '1天 03:23:42',
-		orderAmount: '68.00',
-		commission: '8.00'
-	},
-	{
-		date: '2026-12-12 23:59:59',
-		storeId: '5123456789o',
-		orderNo: 'X25090a4KQ2Po78R',
-		orderStatus: '待发货',
-		countdown: '1天 03:23:42',
-		orderAmount: '68.00',
-		commission: '8.00'
-	},
-	{
-		date: '2026-12-12 23:59:59',
-		storeId: '5123456789o',
-		orderNo: 'X25090a4KQ2Po78R',
-		orderStatus: '待发货',
-		countdown: '1天 03:23:42',
-		orderAmount: '68.00',
-		commission: '8.00'
-	},
-	{
-		date: '2026-12-12 23:59:59',
-		storeId: '5123456789o',
-		orderNo: 'X25090a4KQ2Po78R',
-		orderStatus: '待发货',
-		countdown: '1天 03:23:42',
-		orderAmount: '68.00',
-		commission: '8.00'
-	},
-	{
-		date: '2026-12-12 23:59:59',
-		storeId: '5123456789o',
-		orderNo: 'X25090a4KQ2Po78R',
-		orderStatus: '待发货',
-		countdown: '1天 03:23:42',
-		orderAmount: '68.00',
-		commission: '8.00'
-	},
-	{
-		date: '2026-12-12 23:59:59',
-		storeId: '5123456789o',
-		orderNo: 'X25090a4KQ2Po78R',
-		orderStatus: '待发货',
-		countdown: '1天 03:23:42',
-		orderAmount: '68.00',
-		commission: '8.00'
-	},
-	{
-		date: '2026-12-12 23:59:59',
-		storeId: '5123456789o',
-		orderNo: 'X25090a4KQ2Po78R',
-		orderStatus: '待发货',
-		countdown: '1天 03:23:42',
-		orderAmount: '68.00',
-		commission: '8.00'
-	},
-	{
-		date: '2026-12-12 23:59:59',
-		storeId: '5123456789o',
-		orderNo: 'X25090a4KQ2Po78R',
-		orderStatus: '待发货',
-		countdown: '1天 03:23:42',
-		orderAmount: '68.00',
-		commission: '8.00'
+const orders = ref<FinanceOrder[]>([])
+
+// 获取结算统计
+async function fetchSettlementStats() {
+	try {
+		const res = await shopowerSettlementApi.getSettlementStats()
+		if (res.code === 0 && res.data) {
+			summaryData.settledCommission = parseFloat(res.data.total_settled) || 0
+			summaryData.unsettledCommission = res.data.total_pending || 0
+			summaryData.totalCommission = summaryData.settledCommission + summaryData.unsettledCommission
+		}
+	} catch (error) {
+		console.error('获取结算统计失败', error)
 	}
-])
+}
+
+// 获取结算列表
+async function fetchSettlements() {
+	loading.value = true
+	try {
+		const res = await shopowerSettlementApi.getSettlements({
+			page: pagination.page,
+			page_size: pagination.pageSize
+		})
+		if (res.code === 0 && res.data) {
+			orders.value = res.data.list.map((item: any) => ({
+				date: item.created_at,
+				storeId: item.shop_id?.toString() || '-',
+				orderNo: item.order_sn || '-',
+				orderStatus: item.status === 1 ? '已结算' : '待结算',
+				countdown: '-',
+				orderAmount: item.escrow_amount || '0',
+				commission: item.shop_owner_share || '0'
+			}))
+			pagination.total = res.data.total
+		}
+	} catch (error) {
+		console.error('获取结算列表失败', error)
+	} finally {
+		loading.value = false
+	}
+}
 
 const filteredOrders = computed(() => {
 	let result = [...orders.value]
@@ -236,6 +187,16 @@ const filteredOrders = computed(() => {
 		)
 	}
 	return result
+})
+
+watch(activeTab, () => {
+	pagination.page = 1
+	fetchSettlements()
+})
+
+onMounted(() => {
+	fetchSettlementStats()
+	fetchSettlements()
 })
 
 const formatAmount = (value: number) => {

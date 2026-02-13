@@ -6,7 +6,7 @@ import (
 
 // Shipment 发货记录模型
 type Shipment struct {
-	ID              uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID              uint64     `gorm:"primaryKey" json:"id"`
 	ShopID          uint64     `gorm:"not null;uniqueIndex:uk_shop_order" json:"shop_id"`
 	OrderSN         string     `gorm:"size:64;not null;uniqueIndex:uk_shop_order" json:"order_sn"`
 	PackageNumber   string     `gorm:"size:64;not null;default:''" json:"package_number"`
@@ -27,7 +27,7 @@ func (Shipment) TableName() string {
 
 // LogisticsChannel 物流渠道模型
 type LogisticsChannel struct {
-	ID                   uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID                   uint64    `gorm:"primaryKey" json:"id"`
 	ShopID               uint64    `gorm:"not null;uniqueIndex:uk_shop_channel;index" json:"shop_id"`
 	LogisticsChannelID   uint64    `gorm:"not null;uniqueIndex:uk_shop_channel" json:"logistics_channel_id"`
 	LogisticsChannelName string    `gorm:"size:255;not null" json:"logistics_channel_name"`
@@ -44,7 +44,7 @@ func (LogisticsChannel) TableName() string {
 
 // OperationLog 操作日志模型
 type OperationLog struct {
-	ID            uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID            uint64    `gorm:"primaryKey" json:"id"`
 	ShopID        uint64    `gorm:"not null;default:0;index" json:"shop_id"`
 	OrderSN       string    `gorm:"size:64;not null;default:'';index" json:"order_sn"`
 	OperationType string    `gorm:"size:50;not null;index" json:"operation_type"`

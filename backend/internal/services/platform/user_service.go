@@ -2,10 +2,10 @@ package platform
 
 import (
 	"context"
-	"fmt"
 
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
+	"balance/backend/internal/utils"
 
 	"gorm.io/gorm"
 )
@@ -51,7 +51,7 @@ func (s *UserService) ListUsers(ctx context.Context, userType, keyword string, p
 func (s *UserService) GetUser(ctx context.Context, userID int64) (*models.Admin, error) {
 	var user models.Admin
 	if err := s.db.Where("id = ?", userID).First(&user).Error; err != nil {
-		return nil, fmt.Errorf("用户不存在")
+		return nil, utils.ErrUserNotFound
 	}
 	return &user, nil
 }
@@ -60,7 +60,7 @@ func (s *UserService) GetUser(ctx context.Context, userID int64) (*models.Admin,
 func (s *UserService) UpdateUserStatus(ctx context.Context, userID int64, status int) error {
 	result := s.db.Model(&models.Admin{}).Where("id = ?", userID).Update("status", status)
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("用户不存在")
+		return utils.ErrUserNotFound
 	}
 	return result.Error
 }

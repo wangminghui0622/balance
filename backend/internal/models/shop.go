@@ -6,7 +6,7 @@ import (
 
 // Shop 店铺模型
 type Shop struct {
-	ID                  uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID                  uint64     `gorm:"primaryKey" json:"id"`
 	ShopID              uint64     `gorm:"uniqueIndex;not null" json:"shopId"`
 	ShopIDStr           string     `gorm:"size:64;not null;default:''" json:"shopIdStr"`
 	AdminID             int64      `gorm:"not null;default:0;index" json:"adminId"`
@@ -74,7 +74,7 @@ type ShopWithAuth struct {
 
 // ShopAuthorization 店铺授权模型
 type ShopAuthorization struct {
-	ID               uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID               uint64    `gorm:"primaryKey" json:"id"`
 	ShopID           uint64    `gorm:"uniqueIndex;not null" json:"shop_id"`
 	AccessToken      string    `gorm:"size:512;not null" json:"access_token"`
 	RefreshToken     string    `gorm:"size:512;not null" json:"refresh_token"`

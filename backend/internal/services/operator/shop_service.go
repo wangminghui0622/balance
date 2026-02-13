@@ -6,6 +6,7 @@ import (
 
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
+	"balance/backend/internal/utils"
 
 	"gorm.io/gorm"
 )
@@ -60,7 +61,7 @@ func (s *ShopService) ListShops(ctx context.Context, ownerID int64, keyword stri
 func (s *ShopService) GetShop(ctx context.Context, shopID int64) (*models.Shop, error) {
 	var shop models.Shop
 	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {
-		return nil, fmt.Errorf("店铺不存在")
+		return nil, utils.ErrShopNotFound
 	}
 	return &shop, nil
 }

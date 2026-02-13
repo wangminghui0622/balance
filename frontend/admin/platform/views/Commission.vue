@@ -104,6 +104,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { Search } from '@element-plus/icons-vue'
+import { platformCommissionApi } from '@share/api/platform'
 
 interface CommissionRecord {
   date: string
@@ -121,33 +122,52 @@ const dateRange = ref<string[]>(['2025-09-01', '2025-09-10'])
 const loading = ref(false)
 
 const summaryData = reactive({
-  withdrawable: '5,450.00',
-  totalCommission: '24,543.00',
-  pending: '123,00'
+  withdrawable: '0.00',
+  totalCommission: '0.00',
+  pending: '0.00'
 })
 
 const pagination = reactive({
   page: 1,
   pageSize: 10,
-  total: 123
+  total: 0
 })
 
 const commissionList = ref<CommissionRecord[]>([])
 
+const fetchCommissionStats = async () => {
+  try {
+    const res = await platformCommissionApi.getCommissionStats()
+    if (res.code === 0 && res.data) {
+      summaryData.withdrawable = res.data.withdrawable || '0.00'
+      summaryData.totalCommission = res.data.total_commission || '0.00'
+      summaryData.pending = res.data.pending || '0.00'
+    }
+  } catch (err) {
+    console.error('获取佣金统计失败:', err)
+  }
+}
+
 const fetchCommissions = async () => {
   loading.value = true
   try {
-    // 模拟数据
-    commissionList.value = Array.from({ length: 10 }, (_, i) => ({
-      date: '2026-12-12 23:59:59',
-      type: i === 2 ? '提现' : i === 3 ? '账款调整' : '佣金',
-      storeId: 'S1234567890',
-      orderNo: 'X250904KQ2P078R',
-      amount: '1,000.00',
-      balance: '223,560.50',
-      status: '已结算'
-    }))
-    pagination.total = 123
+    const res = await platformCommissionApi.getCommissionList({
+      type: activeTab.value === 'all' ? undefined : activeTab.value,
+      page: pagination.page,
+      page_size: pagination.pageSize
+    })
+    if (res.code === 0 && res.data) {
+      commissionList.value = res.data.list.map((item: any) => ({
+        date: item.date,
+        type: item.type,
+        storeId: String(item.store_id),
+        orderNo: item.order_no,
+        amount: item.amount,
+        balance: item.balance,
+        status: item.status
+      }))
+      pagination.total = res.data.total
+    }
   } catch (err) {
     console.error('获取佣金列表失败:', err)
   } finally {
@@ -182,6 +202,7 @@ const handlePageChange = (page: number) => {
 }
 
 onMounted(() => {
+  fetchCommissionStats()
   fetchCommissions()
 })
 </script>

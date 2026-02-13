@@ -112,24 +112,68 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { operatorAccountApi } from '@share/api/account'
+import { operatorSettlementApi } from '@share/api/settlement'
 
 const router = useRouter()
 
 const overview = reactive({
-  paymentBalance: 125680.50,
-  unsettledPayment: 18650.00,
-  settledPayment: 1070300.00,
-  withdrawnAmount: 950000.00
+  paymentBalance: 0,
+  unsettledPayment: 0,
+  settledPayment: 0,
+  withdrawnAmount: 0
 })
 
-const recentTransactions = ref([
-  { time: '2025-01-15 14:30:00', type: 'income', description: '订单回款 - X250904KQ2P078R', amount: 288, balance: 125680.50 },
-  { time: '2025-01-14 10:20:00', type: 'income', description: '订单回款 - X250904KQ2P079S', amount: 384, balance: 125392.50 },
-  { time: '2025-01-13 16:45:00', type: 'expense', description: '提现到银行账户', amount: 50000, balance: 125008.50 },
-  { time: '2025-01-12 09:00:00', type: 'income', description: '订单回款 - X250904KQ2P080T', amount: 512, balance: 175008.50 }
-])
+const recentTransactions = ref<any[]>([])
+
+async function fetchAccountInfo() {
+  try {
+    const res = await operatorAccountApi.getAccount()
+    if (res.code === 0 && res.data) {
+      overview.paymentBalance = parseFloat(res.data.balance) || 0
+      overview.settledPayment = parseFloat(res.data.total_earnings) || 0
+      overview.withdrawnAmount = parseFloat(res.data.total_withdrawn) || 0
+    }
+  } catch (error) {
+    console.error('获取账户信息失败', error)
+  }
+}
+
+async function fetchSettlementStats() {
+  try {
+    const res = await operatorSettlementApi.getSettlementStats()
+    if (res.code === 0 && res.data) {
+      overview.unsettledPayment = parseFloat(res.data.total_pending as any) || 0
+    }
+  } catch (error) {
+    console.error('获取结算统计失败', error)
+  }
+}
+
+async function fetchRecentTransactions() {
+  try {
+    const res = await operatorAccountApi.getTransactions({ page: 1, page_size: 5 })
+    if (res.code === 0 && res.data) {
+      recentTransactions.value = res.data.list.map((item: any) => ({
+        time: item.created_at,
+        type: parseFloat(item.amount) >= 0 ? 'income' : 'expense',
+        description: item.remark || `${item.transaction_type} - ${item.related_order_sn || item.transaction_no}`,
+        amount: Math.abs(parseFloat(item.amount)) || 0,
+        balance: parseFloat(item.balance_after) || 0
+      }))
+    }
+  } catch (error) {
+    console.error('获取交易记录失败', error)
+  }
+}
+
+onMounted(() => {
+  fetchAccountInfo()
+  fetchSettlementStats()
+  fetchRecentTransactions()
+})
 
 function formatAmount(value: number): string {
   return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })

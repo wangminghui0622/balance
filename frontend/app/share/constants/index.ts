@@ -2,6 +2,9 @@
  * 应用常量定义
  */
 
+// 导出错误码
+export * from './code'
+
 // ==================== Storage Keys ====================
 export const STORAGE_KEYS = {
   TOKEN: 'token',

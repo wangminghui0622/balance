@@ -1,0 +1,182 @@
+# Balance 系统告警规则
+# 部署路径: /etc/prometheus/rules/balance_alerts.yml
+
+groups:
+  # ==================== 服务可用性告警 ====================
+  - name: service_availability
+    rules:
+      - alert: ServiceDown
+        expr: up{job="balance-admin"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Balance Admin 服务宕机"
+          description: "实例 {{ $labels.instance }} 已宕机超过1分钟"
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m])) by (instance)
+          / sum(rate(http_requests_total[5m])) by (instance) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP 5xx 错误率过高"
+          description: "实例 {{ $labels.instance }} 5xx错误率超过5%"
+
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, instance))
+          > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API 响应延迟过高"
+          description: "实例 {{ $labels.instance }} P95延迟超过2秒"
+
+  # ==================== 数据库告警 ====================
+  - name: database_alerts
+    rules:
+      - alert: MySQLDown
+        expr: mysql_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MySQL 数据库宕机"
+
+      - alert: MySQLConnectionsHigh
+        expr: mysql_global_status_threads_connected > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MySQL 连接数过高"
+          description: "当前连接数: {{ $value }}"
+
+      - alert: MySQLSlowQueries
+        expr: rate(mysql_global_status_slow_queries[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MySQL 慢查询过多"
+          description: "每秒慢查询数: {{ $value }}"
+
+      - alert: DBConnectionPoolExhausted
+        expr: db_connections_active / (db_connections_active + db_connections_idle) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "数据库连接池即将耗尽"
+
+  # ==================== Redis 告警 ====================
+  - name: redis_alerts
+    rules:
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis 服务宕机"
+
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 内存使用率过高"
+          description: "内存使用率: {{ $value | humanizePercentage }}"
+
+      - alert: RedisConnectionsHigh
+        expr: redis_connected_clients > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 连接数过高"
+
+  # ==================== 业务告警 ====================
+  - name: business_alerts
+    rules:
+      - alert: SyncQueueBacklog
+        expr: sync_tasks_queued > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "同步任务队列积压"
+          description: "队列中有 {{ $value }} 个待处理任务"
+
+      - alert: ShopeeAPIErrorRate
+        expr: |
+          sum(rate(shopee_api_calls_total{status="error"}[5m]))
+          / sum(rate(shopee_api_calls_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Shopee API 错误率过高"
+          description: "错误率: {{ $value | humanizePercentage }}"
+
+      - alert: ShopeeAPILatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum(rate(shopee_api_latency_seconds_bucket[5m])) by (le, api_name))
+          > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Shopee API 响应延迟过高"
+
+      - alert: DistributedLockFailure
+        expr: rate(distributed_lock_failed_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "分布式锁获取失败率过高"
+
+      - alert: ShardTableTooLarge
+        expr: shard_table_rows > 5000000
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "分表数据量过大"
+          description: "表 {{ $labels.table_name }} 数据量超过500万"
+
+  # ==================== 系统资源告警 ====================
+  - name: system_alerts
+    rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU 使用率过高"
+          description: "实例 {{ $labels.instance }} CPU使用率: {{ $value }}%"
+
+      - alert: HighMemoryUsage
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "内存使用率过高"
+          description: "实例 {{ $labels.instance }} 内存使用率: {{ $value }}%"
+
+      - alert: DiskSpaceLow
+        expr: (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "磁盘空间不足"
+          description: "实例 {{ $labels.instance }} 磁盘使用率: {{ $value }}%"
