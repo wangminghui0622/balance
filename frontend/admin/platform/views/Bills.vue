@@ -126,7 +126,7 @@ const fetchBills = async () => {
   loading.value = true
   try {
     // 模拟数据
-    billList.value = Array.from({ length: 10 }, (_, i) => ({
+    billList.value = Array.from({ length: 10 }, () => ({
       date: '2026-12-12 23:59:59',
       storeId: 'S1234567890',
       orderNo: 'X250904KQ2P078R',
@@ -143,7 +143,7 @@ const fetchBills = async () => {
   }
 }
 
-const handleTabChange = (tab: string) => {
+const handleTabChange = (_tab: string) => {
   pagination.page = 1
   fetchBills()
 }

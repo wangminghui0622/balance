@@ -11,6 +11,7 @@ import (
 	"balance/backend/admin/internal/router"
 	"balance/backend/internal/config"
 	"balance/backend/internal/database"
+	"balance/backend/internal/models"
 	"balance/backend/internal/services"
 )
 
@@ -31,6 +32,13 @@ func main() {
 	}
 	defer database.Close()
 	log.Println("MySQL连接成功")
+
+	// 自动迁移数据库表结构
+	if err := database.GetDB().AutoMigrate(&models.Order{}); err != nil {
+		log.Printf("数据库迁移警告: %v", err)
+	} else {
+		log.Println("数据库迁移完成")
+	}
 
 	// 初始化Redis
 	if err := database.InitRedis(&cfg.Redis); err != nil {

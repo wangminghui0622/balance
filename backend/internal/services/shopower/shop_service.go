@@ -313,9 +313,14 @@ func (s *ShopService) ListShops(ctx context.Context, adminID int64, page, pageSi
 }
 
 // GetShop 获取店铺详情（验证归属权）
+// 当 adminID 为 0 时，跳过权限检查（用于调度器等内部场景）
 func (s *ShopService) GetShop(ctx context.Context, adminID int64, shopID int64) (*models.Shop, error) {
 	var shop models.Shop
-	if err := s.db.Where("shop_id = ? AND admin_id = ?", shopID, adminID).First(&shop).Error; err != nil {
+	query := s.db.Where("shop_id = ?", shopID)
+	if adminID > 0 {
+		query = query.Where("admin_id = ?", adminID)
+	}
+	if err := query.First(&shop).Error; err != nil {
 		return nil, fmt.Errorf("店铺不存在或无权限访问")
 	}
 	return &shop, nil

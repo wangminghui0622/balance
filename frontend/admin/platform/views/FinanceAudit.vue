@@ -634,7 +634,7 @@ const fetchAuditList = async () => {
   }
 }
 
-const handleMainTabChange = (tab: string) => {
+const handleMainTabChange = (_tab: string) => {
   pagination.page = 1
   fetchAuditList()
 }

@@ -175,7 +175,27 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'finance',
         name: 'operator-finance',
-        component: () => import('@operator/views/Finance.vue')
+        redirect: '/operator/finance/bills'
+      },
+      {
+        path: 'finance/bills',
+        name: 'operator-finance-bills',
+        component: () => import('@operator/views/FinanceBills.vue')
+      },
+      {
+        path: 'finance/payment',
+        name: 'operator-finance-payment',
+        component: () => import('@operator/views/FinancePayment.vue')
+      },
+      {
+        path: 'finance/deposit',
+        name: 'operator-finance-deposit',
+        component: () => import('@operator/views/FinanceDeposit.vue')
+      },
+      {
+        path: 'finance/account',
+        name: 'operator-finance-account',
+        component: () => import('@operator/views/FinanceAccount.vue')
       }
     ]
   },

@@ -2,11 +2,27 @@
   <el-card class="orders-card">
     <template #header>
       <div class="card-header">
-        <span>最近订单</span>
+        <div class="header-left">
+          <div class="tab-buttons">
+            <span 
+              :class="['tab-btn', activeTab === 'recent' ? 'active' : '']" 
+              @click="activeTab = 'recent'"
+            >最近订单</span>
+            <span 
+              :class="['tab-btn', activeTab === 'unsettled' ? 'active' : '']" 
+              @click="activeTab = 'unsettled'"
+            >未结算</span>
+            <span 
+              :class="['tab-btn', activeTab === 'settled' ? 'active' : '']" 
+              @click="activeTab = 'settled'"
+            >已结算</span>
+          </div>
+        </div>
+        <el-button type="text" size="small">所有订单</el-button>
       </div>
     </template>
-    <el-tabs v-model="activeTab" class="order-tabs">
-      <el-tab-pane label="未结算" name="unsettled">
+    <div class="orders-content">
+      <template v-if="activeTab === 'recent' || activeTab === 'unsettled'">
         <div class="orders-list">
           <div
             v-for="(order, index) in unsettledOrders"
@@ -62,8 +78,8 @@
             </div>
           </div>
         </div>
-      </el-tab-pane>
-      <el-tab-pane label="已结算" name="settled">
+      </template>
+      <template v-else>
         <div class="orders-list">
           <div
             v-for="(order, index) in settledOrders"
@@ -94,8 +110,8 @@
             </div>
           </div>
         </div>
-      </el-tab-pane>
-    </el-tabs>
+      </template>
+    </div>
   </el-card>
 </template>
 
@@ -127,7 +143,7 @@ interface Order {
   settledOrderAmount?: string
 }
 
-const activeTab = ref('unsettled')
+const activeTab = ref('recent')
 
 const unsettledOrders = ref<Order[]>([
   {
@@ -194,13 +210,37 @@ const settledOrders = ref<Order[]>([
 }
 
 .card-header {
-  font-weight: 500;
-  font-size: 16px;
-}
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 
-.order-tabs {
-  :deep(.el-tabs__header) {
-    margin-bottom: 16px;
+  .header-left {
+    display: flex;
+    align-items: center;
+  }
+
+  .tab-buttons {
+    display: flex;
+    gap: 16px;
+
+    .tab-btn {
+      font-size: 14px;
+      color: #909399;
+      cursor: pointer;
+      padding-bottom: 4px;
+      border-bottom: 2px solid transparent;
+      transition: all 0.3s;
+
+      &:hover {
+        color: #303133;
+      }
+
+      &.active {
+        color: #303133;
+        font-weight: 500;
+        border-bottom-color: #f90;
+      }
+    }
   }
 }
 

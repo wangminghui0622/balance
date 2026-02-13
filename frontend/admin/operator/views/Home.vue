@@ -2,9 +2,17 @@
   <div class="operator-home">
     <!-- 顶部欢迎区域 -->
     <div class="welcome-section">
-      <div class="welcome-info">
-        <h2>早上好! 运营</h2>
-        <p>今天店铺一切正常!</p>
+      <div class="welcome-left">
+        <div class="welcome-info">
+          <h2>早上好！运营</h2>
+          <p>今天店铺一切正常！<span class="notification-link">有4条通知等您查阅。</span></p>
+        </div>
+      </div>
+      <div class="welcome-right">
+        <div class="notification-banner">
+          <span class="notification-text">重要通知，将发理信息占位符文字占位符文字</span>
+          <el-button type="text" class="close-btn">×</el-button>
+        </div>
       </div>
     </div>
 
@@ -92,12 +100,21 @@ import WeeklyRanking from '../components/WeeklyRanking.vue'
 <style scoped lang="scss">
 .operator-home {
   .welcome-section {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
     margin-bottom: 20px;
   }
 
-  .welcome-info {
-    margin-bottom: 16px;
+  .welcome-left {
+    flex: 1;
+  }
 
+  .welcome-right {
+    flex-shrink: 0;
+  }
+
+  .welcome-info {
     h2 {
       font-size: 20px;
       font-weight: 500;
@@ -108,11 +125,34 @@ import WeeklyRanking from '../components/WeeklyRanking.vue'
     p {
       font-size: 14px;
       color: #909399;
+      margin: 0;
+    }
+
+    .notification-link {
+      color: #f90;
+      cursor: pointer;
     }
   }
 
   .notification-banner {
-    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: #fff;
+    border: 1px solid #ebeef5;
+    border-radius: 4px;
+
+    .notification-text {
+      font-size: 14px;
+      color: #606266;
+    }
+
+    .close-btn {
+      padding: 0;
+      font-size: 18px;
+      color: #909399;
+    }
   }
 
   .main-content-row {

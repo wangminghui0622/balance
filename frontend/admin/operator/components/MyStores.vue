@@ -15,10 +15,10 @@
         <el-avatar :size="40" shape="square" :src="store.avatar" />
         <div class="store-info">
           <div class="store-name">{{ store.name }}</div>
-          <div class="store-status">
-            <el-tag size="small" type="success">已授权111</el-tag>
+          <div class="store-meta">
+            <span class="store-status">{{ store.authorized ? '已授权' : '未授权' }}</span>
+            <span class="store-id">店铺ID：{{ store.storeId }}</span>
           </div>
-          <div class="store-id">店铺ID: {{ store.storeId }}</div>
         </div>
       </div>
     </div>
@@ -105,12 +105,15 @@ const storeList = ref<Store[]>([
   line-height: 1.4;
 }
 
-.store-status {
-  margin: 4px 0;
-}
-
-.store-id {
+.store-meta {
+  display: flex;
+  gap: 12px;
   font-size: 12px;
   color: #909399;
+  margin-top: 4px;
+
+  .store-status {
+    color: #67c23a;
+  }
 }
 </style>

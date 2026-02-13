@@ -155,7 +155,7 @@ const fetchTransactions = async () => {
   }
 }
 
-const handleTabChange = (tab: string) => {
+const handleTabChange = (_tab: string) => {
   pagination.page = 1
   fetchTransactions()
 }

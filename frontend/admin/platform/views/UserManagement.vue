@@ -321,7 +321,7 @@ const userList = ref<UserRecord[]>([])
 const fetchUserList = async () => {
   loading.value = true
   try {
-    userList.value = Array.from({ length: 7 }, (_, i) => ({
+    userList.value = Array.from({ length: 7 }, () => ({
       name: '名字示例文字',
       userId: '1234567890',
       phone: '1234567890',

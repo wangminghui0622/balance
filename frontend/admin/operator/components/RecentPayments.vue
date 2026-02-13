@@ -9,7 +9,7 @@
     <div class="payments-content">
       <div class="payments-left">
         <div class="stat-item">
-          <div class="stat-label">今日回款(NT$)</div>
+          <div class="stat-label">销售额GMV(NT$)</div>
           <div class="stat-value">8,420.00</div>
         </div>
         <div class="stat-item">
@@ -17,7 +17,7 @@
           <div class="stat-value">45</div>
         </div>
         <div class="stat-item">
-          <div class="stat-label">预估佣金(NT$)</div>
+          <div class="stat-label">预估回款(NT$)</div>
           <div class="stat-value">540</div>
         </div>
       </div>

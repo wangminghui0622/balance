@@ -15,7 +15,6 @@ import BaseLayout from '@share/components/BaseLayout.vue'
 import type { MenuItem } from '@share/types'
 import { 
   House, 
-  User, 
   Shop, 
   Document, 
   Wallet, 
@@ -25,7 +24,6 @@ import {
 
 // 使用 markRaw 避免 Vue 将组件转为响应式
 const HouseIcon = markRaw(House)
-const UserIcon = markRaw(User)
 const ShopIcon = markRaw(Shop)
 const DocumentIcon = markRaw(Document)
 const WalletIcon = markRaw(Wallet)
@@ -41,11 +39,6 @@ const menuItems: MenuItem[] = [
     label: '首页',
     path: '/platform',
     icon: HouseIcon
-  },
-  {
-    label: '用户',
-    path: '/platform/users',
-    icon: UserIcon
   },
   {
     label: '店铺',

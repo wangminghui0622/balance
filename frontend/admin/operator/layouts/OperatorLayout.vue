@@ -43,7 +43,13 @@ const menuItems: MenuItem[] = [
   {
     label: '财务',
     path: '/operator/finance',
-    icon: Money
+    icon: Money,
+    children: [
+      { label: '我的账单', path: '/operator/finance/bills' },
+      { label: '我的回款', path: '/operator/finance/payment' },
+      { label: '运营保证金', path: '/operator/finance/deposit' },
+      { label: '收款账户', path: '/operator/finance/account' }
+    ]
   }
 ]
 </script>

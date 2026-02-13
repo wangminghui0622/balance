@@ -1,13 +1,13 @@
 <template>
   <div class="orders-page">
     <div class="page-header">
-      <h1 class="page-title">订单管理</h1>
+      <h1 class="page-title">我的订单</h1>
     </div>
     <el-card class="summary-section-card">
       <div class="summary-section">
         <div class="section-title-wrapper">
-          <span class="title-bar"></span>
-          <span class="section-title">我的店铺({{ shopCount }})</span>
+          <span class="section-title">订单概览</span>
+          <el-button type="primary" link size="small" class="stat-link">订单统计</el-button>
         </div>
         <el-row :gutter="20" class="summary-cards">
           <el-col :xs="24" :sm="12" :md="6" :lg="6" :xl="6">
@@ -49,7 +49,7 @@
           <el-col :xs="24" :sm="12" :md="6" :lg="6" :xl="6">
             <div class="summary-card">
               <div class="card-content">
-                <div class="card-title">回款调整(NT$)</div>
+                <div class="card-title">账款调整(NT$)</div>
                 <div class="card-value">
                   <span class="count">{{ summaryData.adjustments.count }}<span class="unit">单</span></span>
                   <span class="equals">=</span>
@@ -63,67 +63,68 @@
     </el-card>
 
     <!-- 搜索筛选栏 -->
-    <el-card class="filter-card">
-      <el-form :model="filterForm" class="filter-form">
-        <el-row :gutter="20">
-          <el-col :xs="24" :sm="8">
-            <el-form-item label="店铺名称/店铺编号">
-              <el-select v-model="filterForm.shopId" placeholder="全部" clearable filterable style="width: 100%">
-                <el-option label="全部" value="" />
-                <el-option v-for="shop in shopOptions" :key="shop.id" :label="shop.name" :value="shop.id" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :xs="24" :sm="8">
-            <el-form-item label="订单编号">
-              <el-input v-model="filterForm.orderNo" placeholder="请输入订单编号" clearable />
-            </el-form-item>
-          </el-col>
-          <el-col :xs="24" :sm="8">
-            <el-form-item label="订单状态">
-              <el-select v-model="filterForm.status" placeholder="全部" clearable style="width: 100%">
-                <el-option label="全部" value="" />
-                <el-option label="未结算" value="unsettled" />
-                <el-option label="已结算" value="settled" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="20">
-          <el-col :xs="24" :sm="8">
-            <el-form-item label="订单日期">
-              <el-date-picker
-                v-model="filterForm.dateRange"
-                type="daterange"
-                range-separator="至"
-                start-placeholder="开始日期"
-                end-placeholder="结束日期"
-                style="width: 100%"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :xs="24" :sm="16" class="filter-buttons">
-            <el-button type="primary" @click="handleSearch">查询</el-button>
-            <el-button @click="handleReset">重置</el-button>
-          </el-col>
-        </el-row>
-      </el-form>
-    </el-card>
+    <div class="filter-section">
+      <div class="filter-left">
+        <el-input v-model="filterForm.shopKeyword" placeholder="店铺名称/店铺编号" clearable class="filter-input">
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
+        <el-input v-model="filterForm.orderNo" placeholder="订单编号" clearable class="filter-input">
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
+        <el-select v-model="filterForm.settlementStatus" placeholder="订单结算状态" clearable class="filter-select">
+          <el-option label="全部" value="" />
+          <el-option label="未结算" value="unsettled" />
+          <el-option label="已结算" value="settled" />
+        </el-select>
+        <el-select v-model="filterForm.paymentStatus" placeholder="选择付款状态" clearable class="filter-select">
+          <el-option label="全部" value="" />
+          <el-option label="已付款" value="paid" />
+          <el-option label="未付款" value="unpaid" />
+        </el-select>
+        <el-date-picker
+          v-model="filterForm.startDate"
+          type="date"
+          placeholder="开始日期"
+          class="filter-date"
+        />
+        <span class="date-separator">-</span>
+        <el-date-picker
+          v-model="filterForm.endDate"
+          type="date"
+          placeholder="结束日期"
+          class="filter-date"
+        />
+      </div>
+      <div class="filter-right">
+        <el-button type="primary" @click="handleSearch">查询</el-button>
+        <el-button @click="handleReset">重置</el-button>
+      </div>
+    </div>
 
     <!-- 订单列表区域 -->
     <el-card class="orders-card" v-loading="loading">
       <div class="orders-header">
-        <el-tabs v-model="activeTab" @tab-change="handleTabChange" class="order-tabs">
-          <el-tab-pane label="全部订单" name="all" />
-          <el-tab-pane label="未结算" name="unsettled" />
-          <el-tab-pane label="已结算" name="settled" />
-          <el-tab-pane label="回款调整" name="adjustments" />
-        </el-tabs>
+        <div class="tab-buttons">
+          <span 
+            :class="['tab-btn', activeTab === 'all' ? 'active' : '']" 
+            @click="activeTab = 'all'"
+          >全部订单</span>
+          <span 
+            :class="['tab-btn', activeTab === 'unsettled' ? 'active' : '']" 
+            @click="activeTab = 'unsettled'"
+          >未结算</span>
+          <span 
+            :class="['tab-btn', activeTab === 'settled' ? 'active' : '']" 
+            @click="activeTab = 'settled'"
+          >已结算</span>
+        </div>
         <div class="action-buttons">
-          <el-button :icon="View" @click="toggleProductInfo">
-            {{ showProductInfo ? '隐藏商品信息' : '显示商品信息' }}
-          </el-button>
-          <el-button @click="handleExport">导出报表</el-button>
+          <el-checkbox v-model="showProductInfo">商品信息</el-checkbox>
+          <el-checkbox v-model="exportReport">导出报表</el-checkbox>
         </div>
       </div>
 
@@ -131,27 +132,30 @@
       <div class="orders-list">
         <div v-for="(order, index) in filteredOrders" :key="index" class="order-item">
           <!-- 订单头部 -->
-          <div class="order-header">
-            <div class="order-number">
-              订单编号: {{ order.orderNo }}
-              <el-tag v-if="order.paymentStatus" :type="getPaymentStatusType(order.paymentStatus)" size="small" style="margin-left: 8px">
+          <div class="order-row-header">
+            <div class="order-left">
+              <span class="order-number">订单编号：{{ order.orderNo }}</span>
+              <el-tag v-if="order.paymentStatus" :type="getPaymentStatusType(order.paymentStatus)" size="small">
                 {{ getPaymentStatusText(order.paymentStatus) }}
               </el-tag>
             </div>
-            <div class="order-amount-info">
-              <span v-if="order.unsettledPayment">未结算回款: NT${{ order.unsettledPayment }}</span>
-              <span>订单金额: NT${{ formatAmount(order.orderAmount) }}</span>
+            <div class="order-right">
+              <span class="payment-info" v-if="order.unsettledPayment">未结算回款：<span class="highlight">NT${{ order.unsettledPayment }}</span></span>
+              <span class="payment-info" v-if="order.settledPayment">已结算回款：<span class="highlight">NT${{ order.settledPayment }}</span></span>
+              <span class="amount-info">订单金额：<span class="amount">NT${{ formatAmount(order.orderAmount) }}</span></span>
             </div>
           </div>
 
           <!-- 订单信息 -->
-          <div class="order-info">
-            <div class="order-info-line">
-              <span class="info-item">下单时间: {{ order.orderTime }}</span>
-              <span class="info-item">店铺编号: {{ order.storeId }}</span>
-              <span class="info-item">店铺名称: {{ order.storeName }}</span>
-              <span v-if="order.shopeeOrderNo" class="info-item">虾皮订单号: {{ order.shopeeOrderNo }}</span>
-              <span v-if="order.shopeeStatus" class="info-item info-item-right">虾皮订单状态: {{ order.shopeeStatus }}</span>
+          <div class="order-row-info">
+            <div class="info-left">
+              <span class="info-item">下单时间：{{ order.orderTime }}</span>
+              <span class="info-item">店铺编号：{{ order.storeId }}</span>
+              <span class="info-item">店铺名称：{{ order.storeName }}</span>
+              <span class="info-item">虾皮订单号：{{ order.shopeeOrderNo || '-' }}</span>
+            </div>
+            <div class="info-right">
+              <span class="shopee-status">虾皮订单状态：{{ order.shopeeStatus || '待发货' }}</span>
             </div>
           </div>
 
@@ -207,7 +211,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
-import { View, Picture } from '@element-plus/icons-vue'
+import { Search, Picture } from '@element-plus/icons-vue'
 import { operatorOrderApi } from '@share/api/order'
 import { operatorShopeeApi } from '@share/api/shopee'
 
@@ -236,7 +240,6 @@ interface Order {
 }
 
 const loading = ref(false)
-const shopCount = ref(3)
 const activeTab = ref('all')
 const showProductInfo = ref(true)
 
@@ -248,11 +251,15 @@ const summaryData = reactive({
 })
 
 const filterForm = reactive({
-  shopId: '',
+  shopKeyword: '',
   orderNo: '',
-  status: '',
-  dateRange: null as [Date, Date] | null
+  settlementStatus: '',
+  paymentStatus: '',
+  startDate: null as Date | null,
+  endDate: null as Date | null
 })
+
+const exportReport = ref(false)
 
 const shopOptions = ref([
   { id: '1001', name: '示例店铺1' },
@@ -302,28 +309,18 @@ function getPaymentStatusText(status: string): string {
   return map[status] || '未知'
 }
 
-function handleTabChange() {
-  pagination.page = 1
-}
-
-function toggleProductInfo() {
-  showProductInfo.value = !showProductInfo.value
-}
-
-function handleExport() {
-  console.log('导出报表')
-}
-
 function handleSearch() {
   pagination.page = 1
   fetchOrders()
 }
 
 function handleReset() {
-  filterForm.shopId = ''
+  filterForm.shopKeyword = ''
   filterForm.orderNo = ''
-  filterForm.status = ''
-  filterForm.dateRange = null
+  filterForm.settlementStatus = ''
+  filterForm.paymentStatus = ''
+  filterForm.startDate = null
+  filterForm.endDate = null
   handleSearch()
 }
 
@@ -343,18 +340,23 @@ async function fetchOrders() {
       page: pagination.page,
       page_size: pagination.pageSize
     }
-    if (filterForm.shopId) {
-      params.shop_id = filterForm.shopId
+    if (filterForm.shopKeyword) {
+      params.shop_keyword = filterForm.shopKeyword
     }
     if (filterForm.orderNo) {
       params.order_sn = filterForm.orderNo
     }
-    if (filterForm.status) {
-      params.status = filterForm.status
+    if (filterForm.settlementStatus) {
+      params.settlement_status = filterForm.settlementStatus
     }
-    if (filterForm.dateRange && filterForm.dateRange.length === 2) {
-      params.start_time = filterForm.dateRange[0].toISOString().split('T')[0]
-      params.end_time = filterForm.dateRange[1].toISOString().split('T')[0]
+    if (filterForm.paymentStatus) {
+      params.payment_status = filterForm.paymentStatus
+    }
+    if (filterForm.startDate) {
+      params.start_time = filterForm.startDate.toISOString().split('T')[0]
+    }
+    if (filterForm.endDate) {
+      params.end_time = filterForm.endDate.toISOString().split('T')[0]
     }
 
     const res = await operatorOrderApi.getOrderList(params)
@@ -393,9 +395,30 @@ async function fetchShopOptions() {
   }
 }
 
+function loadMockOrders() {
+  orders.value = Array.from({ length: 6 }, (_, i) => ({
+    orderNo: `X250904KQ2P078R`,
+    orderTime: '2025-12-10 23:59:59',
+    storeId: `S123456789${i}`,
+    storeName: '示例文字占位符示例文...',
+    shopeeOrderNo: `250904KQ2P0y8R`,
+    shopeeStatus: i % 2 === 0 ? '待发货' : '已完成',
+    orderAmount: i % 2 === 0 ? 36 : 198,
+    paymentStatus: 'paid',
+    unsettledPayment: i % 3 === 0 ? '8.00' : undefined,
+    settledPayment: i % 3 !== 0 ? '16.00' : undefined,
+    products: []
+  }))
+  pagination.total = 123
+  summaryData.allOrders = { count: 245, amount: 38420 }
+  summaryData.unsettledOrders = { count: 12, amount: 456 }
+  summaryData.settledOrders = { count: 12, amount: 456 }
+  summaryData.adjustments = { count: 12, amount: 456 }
+}
+
 onMounted(() => {
   fetchShopOptions()
-  fetchOrders()
+  loadMockOrders()
 })
 </script>
 
@@ -419,20 +442,17 @@ onMounted(() => {
   .section-title-wrapper {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     margin-bottom: 16px;
-    
-    .title-bar {
-      width: 4px;
-      height: 16px;
-      background: #ff6a3a;
-      border-radius: 2px;
-      margin-right: 8px;
-    }
     
     .section-title {
       font-size: 16px;
       font-weight: 500;
       color: #303133;
+    }
+
+    .stat-link {
+      font-size: 14px;
     }
   }
   
@@ -440,6 +460,7 @@ onMounted(() => {
     background: #f8f9fa;
     border-radius: 8px;
     padding: 16px;
+    border: 1px solid #ebeef5;
     
     .card-title {
       font-size: 14px;
@@ -470,21 +491,53 @@ onMounted(() => {
       
       .amount {
         font-size: 16px;
-        color: #ff6a3a;
+        color: #303133;
         font-weight: 500;
       }
     }
   }
-  
-  .filter-card {
+
+  .filter-section {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     margin-bottom: 20px;
-    
-    .filter-buttons {
+    padding: 16px 20px;
+    background: #fff;
+    border-radius: 8px;
+    border: 1px solid #ebeef5;
+
+    .filter-left {
       display: flex;
-      align-items: flex-end;
-      justify-content: flex-end;
-      padding-bottom: 18px;
+      gap: 12px;
+      align-items: center;
     }
+
+    .filter-right {
+      display: flex;
+      gap: 8px;
+    }
+
+    .filter-input {
+      width: 160px;
+    }
+
+    .filter-select {
+      width: 140px;
+    }
+
+    .filter-date {
+      width: 130px;
+    }
+
+    .date-separator {
+      color: #909399;
+    }
+  }
+
+  :deep(.el-input__wrapper),
+  :deep(.el-select .el-select__wrapper) {
+    border-radius: 4px;
   }
 }
 
@@ -493,24 +546,37 @@ onMounted(() => {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 20px;
+    padding-bottom: 12px;
     border-bottom: 1px solid #e4e7ed;
+    margin-bottom: 20px;
 
-    .order-tabs {
-      flex: 1;
+    .tab-buttons {
+      display: flex;
+      gap: 24px;
 
-      :deep(.el-tabs__header) {
-        margin-bottom: 0;
-      }
+      .tab-btn {
+        font-size: 14px;
+        color: #909399;
+        cursor: pointer;
+        padding-bottom: 12px;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -13px;
 
-      :deep(.el-tabs__nav-wrap::after) {
-        display: none;
+        &:hover {
+          color: #303133;
+        }
+
+        &.active {
+          color: #303133;
+          font-weight: 500;
+          border-bottom-color: #303133;
+        }
       }
     }
 
     .action-buttons {
       display: flex;
-      gap: 10px;
+      gap: 16px;
     }
   }
 
@@ -521,45 +587,78 @@ onMounted(() => {
   }
 
   .order-item {
-    border: 1px solid #e4e7ed;
-    border-radius: 8px;
-    overflow: hidden;
+    border-bottom: 1px solid #ebeef5;
+    padding: 16px 0;
 
-    .order-header {
+    &:last-child {
+      border-bottom: none;
+    }
+
+    .order-row-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 12px 16px;
-      background: #f5f7fa;
-      border-bottom: 1px solid #e4e7ed;
+      margin-bottom: 12px;
 
-      .order-number {
-        font-weight: 500;
-        color: #303133;
+      .order-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+
+        .order-number {
+          font-weight: 500;
+          color: #303133;
+          font-size: 14px;
+        }
       }
 
-      .order-amount-info {
+      .order-right {
         display: flex;
         gap: 24px;
-        color: #606266;
         font-size: 14px;
+
+        .payment-info {
+          color: #909399;
+
+          .highlight {
+            color: #ff6a3a;
+            font-weight: 500;
+          }
+        }
+
+        .amount-info {
+          color: #909399;
+
+          .amount {
+            color: #303133;
+            font-weight: 500;
+          }
+        }
       }
     }
 
-    .order-info {
-      padding: 12px 16px;
+    .order-row-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 16px;
       background: #fafafa;
-      border-bottom: 1px solid #e4e7ed;
+      border-radius: 4px;
 
-      .order-info-line {
+      .info-left {
         display: flex;
-        flex-wrap: wrap;
-        gap: 24px;
-        font-size: 13px;
-        color: #606266;
+        gap: 32px;
 
-        .info-item-right {
-          margin-left: auto;
+        .info-item {
+          font-size: 13px;
+          color: #909399;
+        }
+      }
+
+      .info-right {
+        .shopee-status {
+          font-size: 13px;
+          color: #ff6a3a;
         }
       }
     }
