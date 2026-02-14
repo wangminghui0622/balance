@@ -12,7 +12,10 @@ import (
 	"balance/backend/internal/models"
 	"balance/backend/internal/services/shopower"
 	"balance/backend/internal/shopee"
+	"balance/backend/internal/utils"
 
+	"github.com/go-redsync/redsync/v4"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -22,6 +25,7 @@ type WebhookService struct {
 	shardedDB    *database.ShardedDB
 	orderService *shopower.OrderService
 	shopService  *shopower.ShopService
+	rs           *redsync.Redsync
 }
 
 // NewWebhookService 创建Webhook服务
@@ -32,13 +36,14 @@ func NewWebhookService() *WebhookService {
 		shardedDB:    database.NewShardedDB(db),
 		orderService: shopower.NewOrderService(),
 		shopService:  shopower.NewShopService(),
+		rs:           database.GetRedsync(),
 	}
 }
 
 // NewBackgroundContext 创建后台上下文
-func NewBackgroundContext() context.Context {
-	ctx, _ := context.WithTimeout(context.Background(), 30*time.Second)
-	return ctx
+// 注意：调用者应该在使用完毕后调用 cancel()
+func NewBackgroundContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
 }
 
 // CheckWebhookDuplicate 检查Webhook是否重复
@@ -53,40 +58,64 @@ func (s *WebhookService) CheckWebhookDuplicate(ctx context.Context, shopID uint6
 	return !ok
 }
 
-// AcquireOrderLock 获取订单更新锁
-func (s *WebhookService) AcquireOrderLock(ctx context.Context, shopID uint64, orderSN string) bool {
-	rdb := database.GetRedis()
+// AcquireOrderLock 获取订单更新锁，返回释放函数（nil表示失败）
+func (s *WebhookService) AcquireOrderLock(ctx context.Context, shopID uint64, orderSN string) func() {
 	lockKey := fmt.Sprintf(consts.KeyOrderLock, shopID, orderSN)
+	mutex := s.rs.NewMutex(lockKey,
+		redsync.WithExpiry(consts.OrderLockExpire),
+		redsync.WithTries(1),
+	)
 
-	ok, err := rdb.SetNX(ctx, lockKey, time.Now().Unix(), consts.OrderLockExpire).Result()
-	if err != nil {
-		return false
+	// 尝试获取锁并自动续期
+	unlockFunc, acquired := utils.TryLockWithAutoExtend(ctx, mutex, consts.OrderLockExpire/3)
+	if !acquired {
+		return nil
 	}
-	return ok
+	return unlockFunc
 }
 
-// ReleaseOrderLock 释放订单更新锁
-func (s *WebhookService) ReleaseOrderLock(ctx context.Context, shopID uint64, orderSN string) {
-	rdb := database.GetRedis()
-	lockKey := fmt.Sprintf(consts.KeyOrderLock, shopID, orderSN)
-	rdb.Del(ctx, lockKey)
-}
+// checkAndSetUpdateTimeLua Lua脚本：原子性地检查并设置更新时间
+const checkAndSetUpdateTimeLua = `
+	-- KEYS[1]: updateTimeKey
+	-- ARGV[1]: newUpdateTime
+	-- ARGV[2]: ttl (秒)
+	
+	local oldTime = redis.call('GET', KEYS[1])
+	if oldTime then
+		if tonumber(ARGV[1]) <= tonumber(oldTime) then
+			return 0
+		end
+	end
+	
+	redis.call('SETEX', KEYS[1], ARGV[2], ARGV[1])
+	return 1
+`
 
-// CheckAndSetUpdateTime 检查并设置更新时间
+// CheckAndSetUpdateTime 检查并设置更新时间（使用Lua脚本保证原子性）
 func (s *WebhookService) CheckAndSetUpdateTime(ctx context.Context, shopID uint64, orderSN string, newUpdateTime int64) bool {
 	rdb := database.GetRedis()
 	updateTimeKey := fmt.Sprintf(consts.KeyOrderUpdateTime, shopID, orderSN)
 
-	cachedTime, err := rdb.Get(ctx, updateTimeKey).Result()
-	if err == nil {
-		oldTime, _ := strconv.ParseInt(cachedTime, 10, 64)
-		if newUpdateTime <= oldTime {
-			return false
+	script := redis.NewScript(checkAndSetUpdateTimeLua)
+	result, err := script.Run(ctx, rdb,
+		[]string{updateTimeKey},
+		newUpdateTime, int(consts.OrderUpdateTimeTTL.Seconds()),
+	).Int()
+
+	if err != nil {
+		// 降级：使用非原子操作
+		cachedTime, err := rdb.Get(ctx, updateTimeKey).Result()
+		if err == nil {
+			oldTime, _ := strconv.ParseInt(cachedTime, 10, 64)
+			if newUpdateTime <= oldTime {
+				return false
+			}
 		}
+		rdb.Set(ctx, updateTimeKey, newUpdateTime, consts.OrderUpdateTimeTTL)
+		return true
 	}
 
-	rdb.Set(ctx, updateTimeKey, newUpdateTime, consts.OrderUpdateTimeTTL)
-	return true
+	return result == 1
 }
 
 // CanStatusTransition 检查状态转换是否合法 - 使用分表
@@ -133,10 +162,11 @@ func (s *WebhookService) HandleOrderStatusUpdate(ctx context.Context, shopID uin
 		return
 	}
 
-	if !s.AcquireOrderLock(ctx, shopID, orderData.OrderSN) {
+	unlockFunc := s.AcquireOrderLock(ctx, shopID, orderData.OrderSN)
+	if unlockFunc == nil {
 		return
 	}
-	defer s.ReleaseOrderLock(ctx, shopID, orderData.OrderSN)
+	defer unlockFunc()
 
 	if orderData.UpdateTime > 0 && !s.CheckAndSetUpdateTime(ctx, shopID, orderData.OrderSN, orderData.UpdateTime) {
 		return
@@ -220,10 +250,11 @@ func (s *WebhookService) HandleOrderCancel(ctx context.Context, shopID uint64, d
 		return
 	}
 
-	if !s.AcquireOrderLock(ctx, shopID, cancelData.OrderSN) {
+	unlockFunc := s.AcquireOrderLock(ctx, shopID, cancelData.OrderSN)
+	if unlockFunc == nil {
 		return
 	}
-	defer s.ReleaseOrderLock(ctx, shopID, cancelData.OrderSN)
+	defer unlockFunc()
 
 	s.LogWebhook(ctx, shopID, consts.WebhookBuyerCancelOrder, "order_cancel", data)
 
@@ -310,7 +341,8 @@ func (s *WebhookService) LogWebhook(ctx context.Context, shopID uint64, code int
 }
 
 func (s *WebhookService) refreshOrderDetail(shopID uint64, orderSN string) {
-	ctx := NewBackgroundContext()
+	ctx, cancel := NewBackgroundContext()
+	defer cancel()
 
 	var shop models.Shop
 	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {

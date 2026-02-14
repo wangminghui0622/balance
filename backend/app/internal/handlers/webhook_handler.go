@@ -68,7 +68,8 @@ func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
 
 // processWebhook 异步处理Webhook
 func (h *WebhookHandler) processWebhook(req WebhookRequest) {
-	ctx := services.NewBackgroundContext()
+	ctx, cancel := services.NewBackgroundContext()
+	defer cancel()
 
 	switch req.Code {
 	case consts.WebhookShopAuth:

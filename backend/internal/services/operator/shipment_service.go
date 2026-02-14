@@ -228,7 +228,8 @@ func (s *ShipmentService) getAccessToken(ctx context.Context, shopID uint64) (st
 
 // fetchTrackingNumber 异步获取物流单号 - 使用分表
 func (s *ShipmentService) fetchTrackingNumber(shopID uint64, orderSN string, recordID uint64) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	time.Sleep(3 * time.Second) // 等待 Shopee 处理
 
 	var shop models.Shop

@@ -8,6 +8,8 @@ import (
 
 	"balance/backend/internal/consts"
 	"balance/backend/internal/database"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // RateLimiter 限流器
@@ -141,18 +143,24 @@ func containsImpl(s, substr string) bool {
 	return false
 }
 
-// CheckRateLimit 检查并记录API调用频率
+// rateLimitScript Lua脚本：原子性地增加计数并设置过期时间
+const rateLimitScript = `
+	local count = redis.call('INCR', KEYS[1])
+	if count == 1 then
+		redis.call('EXPIRE', KEYS[1], ARGV[1])
+	end
+	return count
+`
+
+// CheckRateLimit 检查并记录API调用频率（使用Lua脚本保证原子性）
 func CheckRateLimit(ctx context.Context, shopID uint64, apiName string) error {
 	rdb := database.GetRedis()
 	key := fmt.Sprintf(consts.KeyRateLimit, shopID, apiName)
 
-	count, err := rdb.Incr(ctx, key).Result()
+	script := redis.NewScript(rateLimitScript)
+	count, err := script.Run(ctx, rdb, []string{key}, int(consts.RateLimitExpire.Seconds())).Int64()
 	if err != nil {
 		return fmt.Errorf("限流检查失败: %w", err)
-	}
-
-	if count == 1 {
-		rdb.Expire(ctx, key, consts.RateLimitExpire)
 	}
 
 	if count > int64(consts.ShopeeAPIRateLimit*60) {

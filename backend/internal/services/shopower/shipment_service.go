@@ -11,6 +11,7 @@ import (
 	"balance/backend/internal/shopee"
 	"balance/backend/internal/utils"
 
+	"github.com/go-redsync/redsync/v4"
 	"gorm.io/gorm"
 )
 
@@ -35,6 +36,7 @@ type ShipmentService struct {
 	db          *gorm.DB
 	shardedDB   *database.ShardedDB
 	shopService *ShopService
+	rs          *redsync.Redsync
 }
 
 // NewShipmentService 创建发货服务
@@ -44,23 +46,25 @@ func NewShipmentService() *ShipmentService {
 		db:          db,
 		shardedDB:   database.NewShardedDB(db),
 		shopService: NewShopService(),
+		rs:          database.GetRedsync(),
 	}
 }
 
 // ShipOrder 发货（带锁、状态检查、日志记录）
 func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *ShipOrderRequest) error {
-	rdb := database.GetRedis()
-
-	// 发货锁，防止重复发货
+	// 使用 redsync 创建分布式锁
 	lockKey := fmt.Sprintf(consts.KeyShipLock, req.ShopID, req.OrderSN)
-	ok, err := rdb.SetNX(ctx, lockKey, time.Now().Unix(), consts.ShipLockExpire).Result()
-	if err != nil {
-		return fmt.Errorf("获取发货锁失败: %w", err)
-	}
-	if !ok {
+	mutex := s.rs.NewMutex(lockKey,
+		redsync.WithExpiry(consts.ShipLockExpire),
+		redsync.WithTries(1),
+	)
+
+	// 尝试获取锁并自动续期
+	unlockFunc, acquired := utils.TryLockWithAutoExtend(ctx, mutex, consts.ShipLockExpire/3)
+	if !acquired {
 		return utils.ErrOrderShipping
 	}
-	defer rdb.Del(ctx, lockKey)
+	defer unlockFunc()
 
 	shop, err := s.shopService.GetShop(ctx, adminID, req.ShopID)
 	if err != nil {
@@ -125,7 +129,7 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *Shi
 
 		// 更新缓存
 		statusKey := fmt.Sprintf(consts.KeyOrderStatus, req.ShopID, req.OrderSN)
-		rdb.Set(ctx, statusKey, consts.OrderStatusProcessed, consts.OrderStatusExpire)
+		database.GetRedis().Set(ctx, statusKey, consts.OrderStatusProcessed, consts.OrderStatusExpire)
 	}
 
 	s.db.Table(shipmentTable).Where("id = ?", shipment.ID).Updates(&shipment)

@@ -7,6 +7,7 @@ import (
 	"balance/backend/admin/internal/handlers/operator"
 	"balance/backend/admin/internal/handlers/platform"
 	"balance/backend/admin/internal/handlers/shopower"
+	"balance/backend/internal/config"
 	"balance/backend/internal/consts"
 	"balance/backend/internal/middleware"
 
@@ -16,7 +17,7 @@ import (
 )
 
 // SetupRouter 设置路由
-func SetupRouter(mode string) *gin.Engine {
+func SetupRouter(mode string, cfg *config.Config) *gin.Engine {
 	gin.SetMode(mode)
 	r := gin.New()
 	r.Use(gin.Logger())
@@ -270,6 +271,11 @@ func SetupRouter(mode string) *gin.Engine {
 			platformGroup.PUT("/collection/accounts/:id", platformCollectionHandler.UpdateCollectionAccount)
 			platformGroup.DELETE("/collection/accounts/:id", platformCollectionHandler.DeleteCollectionAccount)
 			platformGroup.POST("/collection/accounts/:id/default", platformCollectionHandler.SetDefaultAccount)
+
+			// 模拟数据生成器（仅沙箱环境可用）
+			platformMockHandler := platform.NewMockHandler(cfg)
+			platformGroup.POST("/mock/orders", platformMockHandler.GenerateMockOrders)
+			platformGroup.DELETE("/mock/clean", platformMockHandler.CleanMockData)
 		}
 
 	}

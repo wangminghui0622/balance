@@ -6,19 +6,23 @@ import (
 	"time"
 
 	"balance/backend/internal/database"
+	"balance/backend/internal/utils"
 
+	"github.com/go-redsync/redsync/v4"
 	"github.com/robfig/cron/v3"
 )
 
 const (
-	financeSyncSchedulerLock = "sync:finance:scheduler:lock"
-	financeSyncLockTTL       = 60 * time.Second
+	financeSyncSchedulerLock  = "sync:finance:scheduler:lock"
+	financeSyncLockTTL        = 2 * time.Minute
+	financeSyncExtendInterval = financeSyncLockTTL / 3
 )
 
 // Scheduler 同步调度器
 type Scheduler struct {
 	cron               *cron.Cron
 	financeSyncService *FinanceSyncService
+	rs                 *redsync.Redsync
 }
 
 // NewScheduler 创建调度器
@@ -26,6 +30,7 @@ func NewScheduler(workerCount int) *Scheduler {
 	return &Scheduler{
 		cron:               cron.New(cron.WithSeconds()),
 		financeSyncService: NewFinanceSyncService(workerCount),
+		rs:                 database.GetRedsync(),
 	}
 }
 
@@ -67,20 +72,22 @@ func (s *Scheduler) Start() {
 
 // tryScheduleWithLock 尝试获取分布式锁后执行调度
 func (s *Scheduler) tryScheduleWithLock() {
-	ctx := context.Background()
-	rdb := database.GetRedis()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
-	// 尝试获取分布式锁
-	ok, err := rdb.SetNX(ctx, financeSyncSchedulerLock, "1", financeSyncLockTTL).Result()
-	if err != nil {
-		log.Printf("[FinanceSync] 获取分布式锁失败: %v", err)
-		return
-	}
-	if !ok {
+	// 使用 redsync 创建分布式锁
+	mutex := s.rs.NewMutex(financeSyncSchedulerLock,
+		redsync.WithExpiry(financeSyncLockTTL),
+		redsync.WithTries(1),
+	)
+
+	// 尝试获取锁并自动续期
+	unlockFunc, acquired := utils.TryLockWithAutoExtend(ctx, mutex, financeSyncExtendInterval)
+	if !acquired {
 		log.Println("[FinanceSync] 其他节点正在调度，跳过")
 		return
 	}
-	defer rdb.Del(ctx, financeSyncSchedulerLock)
+	defer unlockFunc()
 
 	log.Println("[FinanceSync] 获取分布式锁成功，开始调度财务同步任务...")
 	s.financeSyncService.ScheduleAllShops()

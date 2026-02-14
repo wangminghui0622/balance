@@ -10,6 +10,7 @@ import (
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // SettlementService 结算服务
@@ -35,13 +36,14 @@ func (s *SettlementService) GenerateSettlementNo() string {
 }
 
 // SettleOrder 结算订单 (Shopee 结算后调用) - 需要shopID来定位分表
+// 使用 FOR UPDATE 行锁防止并发结算同一订单
 func (s *SettlementService) SettleOrder(ctx context.Context, shopID uint64, orderSN string, escrowAmount decimal.Decimal) (*models.OrderSettlement, error) {
 	shipmentRecordTable := database.GetOrderShipmentRecordTableName(shopID)
 	settlementTable := database.GetOrderSettlementTableName(shopID)
 
-	// 1. 获取发货记录
+	// 1. 获取发货记录（使用 FOR UPDATE 行锁防止并发结算）
 	var shipmentRecord models.OrderShipmentRecord
-	if err := s.db.Table(shipmentRecordTable).Where("order_sn = ? AND status = ?", orderSN, models.ShipmentRecordStatusShipped).First(&shipmentRecord).Error; err != nil {
+	if err := s.db.Table(shipmentRecordTable).Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_sn = ? AND status = ?", orderSN, models.ShipmentRecordStatusShipped).First(&shipmentRecord).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, fmt.Errorf("未找到发货记录或订单未发货")
 		}

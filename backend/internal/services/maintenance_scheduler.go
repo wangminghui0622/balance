@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -13,6 +14,8 @@ type MaintenanceScheduler struct {
 	cron           *cron.Cron
 	archiveService *ArchiveService
 	statsService   *StatsService
+	wg             sync.WaitGroup // 用于等待后台任务结束
+	stopChan       chan struct{}  // 用于通知后台任务停止
 }
 
 // NewMaintenanceScheduler 创建维护任务调度器
@@ -21,6 +24,7 @@ func NewMaintenanceScheduler() *MaintenanceScheduler {
 		cron:           cron.New(cron.WithSeconds()),
 		archiveService: NewArchiveService(),
 		statsService:   NewStatsService(),
+		stopChan:       make(chan struct{}),
 	}
 }
 
@@ -30,7 +34,8 @@ func (s *MaintenanceScheduler) Start() {
 
 	// 每天凌晨2点执行日志归档
 	_, err := s.cron.AddFunc("0 0 2 * * *", func() {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
 		count, err := s.archiveService.ArchiveOperationLogs(ctx)
 		if err != nil {
 			log.Printf("[Maintenance] 日志归档失败: %v", err)
@@ -44,7 +49,8 @@ func (s *MaintenanceScheduler) Start() {
 
 	// 每天凌晨3点生成每日统计
 	_, err = s.cron.AddFunc("0 0 3 * * *", func() {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
 		if err := s.statsService.GenerateDailyStats(ctx); err != nil {
 			log.Printf("[Maintenance] 生成每日统计失败: %v", err)
 		}
@@ -55,7 +61,8 @@ func (s *MaintenanceScheduler) Start() {
 
 	// 每月1号凌晨4点清理过期归档（保留365天）
 	_, err = s.cron.AddFunc("0 0 4 1 * *", func() {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
 		count, err := s.archiveService.CleanupOldArchives(ctx, 365)
 		if err != nil {
 			log.Printf("[Maintenance] 清理过期归档失败: %v", err)
@@ -71,21 +78,32 @@ func (s *MaintenanceScheduler) Start() {
 	log.Println("[Maintenance] 维护任务调度器已启动")
 
 	// 启动后检查是否需要补充历史统计
+	s.wg.Add(1)
 	go s.backfillStats()
 }
 
-// Stop 停止维护任务调度器
+// Stop 停止维护任务调度器（等待所有后台任务结束）
 func (s *MaintenanceScheduler) Stop() {
 	log.Println("[Maintenance] 停止维护任务调度器...")
+	close(s.stopChan) // 通知后台任务停止
 	s.cron.Stop()
+	s.wg.Wait() // 等待所有后台任务结束
 	log.Println("[Maintenance] 维护任务调度器已停止")
 }
 
 // backfillStats 补充历史统计数据（首次启动时执行）
 func (s *MaintenanceScheduler) backfillStats() {
-	time.Sleep(10 * time.Second) // 等待系统启动完成
+	defer s.wg.Done()
+	
+	// 等待系统启动完成，但可被停止信号中断
+	select {
+	case <-time.After(10 * time.Second):
+	case <-s.stopChan:
+		return
+	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 	
 	// 检查是否有统计数据
 	var count int64
@@ -122,19 +140,22 @@ func (s *MaintenanceScheduler) backfillStats() {
 
 // TriggerArchive 手动触发归档
 func (s *MaintenanceScheduler) TriggerArchive() (int64, error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
 	return s.archiveService.ArchiveOperationLogs(ctx)
 }
 
 // TriggerStats 手动触发统计生成
 func (s *MaintenanceScheduler) TriggerStats() error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
 	return s.statsService.GenerateDailyStats(ctx)
 }
 
 // GetArchiveStats 获取归档统计
 func (s *MaintenanceScheduler) GetArchiveStats() map[string]interface{} {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
 	return s.archiveService.GetArchiveStats(ctx)
 }
 

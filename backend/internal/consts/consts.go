@@ -95,12 +95,12 @@ const (
 	TokenExpireBuffer  = 5 * time.Minute
 	ShopInfoExpire     = 1 * time.Hour
 	OrderStatusExpire  = 30 * time.Minute
-	SyncLockExpire     = 5 * time.Minute
-	ShipLockExpire     = 1 * time.Minute
+	SyncLockExpire     = 10 * time.Minute // 增加到10分钟，防止长时间同步锁过期
+	ShipLockExpire     = 2 * time.Minute  // 增加到2分钟，防止API调用超时
 	RateLimitExpire    = 1 * time.Minute
 	LogisticsExpire    = 1 * time.Hour
 	WebhookDedupExpire = 5 * time.Minute
-	OrderLockExpire    = 10 * time.Second
+	OrderLockExpire    = 30 * time.Second // 增加到30秒，防止数据库操作超时
 	OrderUpdateTimeTTL = 24 * time.Hour
 )
 

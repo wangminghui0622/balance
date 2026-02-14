@@ -8,8 +8,9 @@ import (
 
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
+	"balance/backend/internal/utils"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/go-redsync/redsync/v4"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -17,34 +18,38 @@ import (
 const (
 	statsSchedulerLock = "stats:scheduler:lock"
 	statsLockTTL       = 10 * time.Minute
+	statsExtendInterval = statsLockTTL / 3 // 续期间隔为TTL的1/3
 )
 
 // StatsService 统计服务
 type StatsService struct {
-	db  *gorm.DB
-	rdb *redis.Client
+	db *gorm.DB
+	rs *redsync.Redsync
 }
 
 // NewStatsService 创建统计服务
 func NewStatsService() *StatsService {
 	return &StatsService{
-		db:  database.GetDB(),
-		rdb: database.GetRedis(),
+		db: database.GetDB(),
+		rs: database.GetRedsync(),
 	}
 }
 
 // GenerateDailyStats 生成每日统计（凌晨执行，统计前一天数据）
 func (s *StatsService) GenerateDailyStats(ctx context.Context) error {
-	// 获取分布式锁
-	ok, err := s.rdb.SetNX(ctx, statsSchedulerLock, "1", statsLockTTL).Result()
-	if err != nil {
-		return fmt.Errorf("获取统计锁失败: %w", err)
-	}
-	if !ok {
+	// 使用 redsync 创建分布式锁
+	mutex := s.rs.NewMutex(statsSchedulerLock,
+		redsync.WithExpiry(statsLockTTL),
+		redsync.WithTries(1), // 只尝试一次，不重试
+	)
+
+	// 尝试获取锁并自动续期
+	cancel, acquired := utils.TryLockWithAutoExtend(ctx, mutex, statsExtendInterval)
+	if !acquired {
 		log.Println("[Stats] 其他节点正在生成统计，跳过")
 		return nil
 	}
-	defer s.rdb.Del(ctx, statsSchedulerLock)
+	defer cancel() // 停止续期并释放锁
 
 	// 统计前一天的数据
 	yesterday := time.Now().AddDate(0, 0, -1)

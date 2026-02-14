@@ -17,6 +17,7 @@ type MetricsCollector struct {
 	db       *gorm.DB
 	interval time.Duration
 	stopChan chan struct{}
+	doneChan chan struct{} // 用于等待goroutine结束
 }
 
 // NewMetricsCollector 创建指标收集器
@@ -25,6 +26,7 @@ func NewMetricsCollector() *MetricsCollector {
 		db:       database.GetDB(),
 		interval: 1 * time.Minute,
 		stopChan: make(chan struct{}),
+		doneChan: make(chan struct{}),
 	}
 }
 
@@ -34,13 +36,16 @@ func (m *MetricsCollector) Start() {
 	go m.collect()
 }
 
-// Stop 停止指标收集
+// Stop 停止指标收集（等待goroutine结束）
 func (m *MetricsCollector) Stop() {
 	close(m.stopChan)
+	<-m.doneChan // 等待collect goroutine结束
 	log.Println("[Metrics] 指标收集器已停止")
 }
 
 func (m *MetricsCollector) collect() {
+	defer close(m.doneChan) // 通知Stop方法goroutine已结束
+	
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
 

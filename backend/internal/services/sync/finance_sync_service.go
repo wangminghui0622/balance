@@ -14,6 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // FinanceSyncService 财务收入增量同步服务
@@ -222,14 +223,10 @@ func (s *FinanceSyncService) syncShopFinance(ctx context.Context, shopID uint64)
 				continue
 			}
 
-			// 检查是否已存在 - 使用分表
+			// 使用分表
 			financeTable := database.GetFinanceIncomeTableName(shopID)
-			var existing models.FinanceIncome
-			if err := s.db.Table(financeTable).Where("transaction_id = ?", tx.TransactionID).First(&existing).Error; err == nil {
-				continue
-			}
 
-			// 保存记录
+			// 构建记录
 			income := models.FinanceIncome{
 				ShopID:                 shopID,
 				TransactionID:          tx.TransactionID,
@@ -252,7 +249,14 @@ func (s *FinanceSyncService) syncShopFinance(ctx context.Context, shopID uint64)
 				SettlementHandleStatus: models.SettlementStatusPending,
 			}
 
-			if err := s.db.Table(financeTable).Create(&income).Error; err == nil {
+			// 使用 ON DUPLICATE KEY 避免竞态条件
+			// 如果 transaction_id 已存在则忽略（DoNothing）
+			result := s.db.Table(financeTable).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "transaction_id"}},
+				DoNothing: true,
+			}).Create(&income)
+
+			if result.Error == nil && result.RowsAffected > 0 {
 				newCount++
 				totalCount++
 				if tx.CreateTime > maxTransactionTime {

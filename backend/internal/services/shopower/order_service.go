@@ -12,6 +12,7 @@ import (
 	"balance/backend/internal/shopee"
 	"balance/backend/internal/utils"
 
+	"github.com/go-redsync/redsync/v4"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -22,6 +23,7 @@ type OrderService struct {
 	db          *gorm.DB
 	shopService *ShopService
 	shardedDB   *database.ShardedDB
+	rs          *redsync.Redsync
 }
 
 // NewOrderService 创建订单服务
@@ -31,6 +33,7 @@ func NewOrderService() *OrderService {
 		db:          db,
 		shopService: NewShopService(),
 		shardedDB:   database.NewShardedDB(db),
+		rs:          database.GetRedsync(),
 	}
 }
 
@@ -41,16 +44,19 @@ func (s *OrderService) SyncOrders(ctx context.Context, adminID int64, shopID int
 		return 0, err
 	}
 
-	rdb := database.GetRedis()
+	// 使用 redsync 创建分布式锁
 	lockKey := fmt.Sprintf(consts.KeySyncLock, shopID)
-	ok, err := rdb.SetNX(ctx, lockKey, time.Now().Unix(), consts.SyncLockExpire).Result()
-	if err != nil {
-		return 0, fmt.Errorf("获取同步锁失败: %w", err)
-	}
-	if !ok {
+	mutex := s.rs.NewMutex(lockKey,
+		redsync.WithExpiry(consts.SyncLockExpire),
+		redsync.WithTries(1),
+	)
+
+	// 尝试获取锁并自动续期
+	unlockFunc, acquired := utils.TryLockWithAutoExtend(ctx, mutex, consts.SyncLockExpire/3)
+	if !acquired {
 		return 0, utils.ErrShopSyncing
 	}
-	defer rdb.Del(ctx, lockKey)
+	defer unlockFunc()
 
 	accessToken, err := s.getAccessToken(ctx, uint64(shopID))
 	if err != nil {
@@ -189,17 +195,12 @@ func (s *OrderService) saveOrder(ctx context.Context, shopID uint64, detail *sho
 		}
 	}
 
-	// 检查更新时间缓存
+	// 检查更新时间缓存（使用Lua脚本保证原子性）
 	if detail.UpdateTime > 0 {
 		updateTimeKey := fmt.Sprintf(consts.KeyOrderUpdateTime, shopID, detail.OrderSN)
-		cachedTime, err := rdb.Get(ctx, updateTimeKey).Result()
-		if err == nil {
-			oldTime, _ := strconv.ParseInt(cachedTime, 10, 64)
-			if detail.UpdateTime <= oldTime {
-				return nil
-			}
+		if !s.checkAndSetUpdateTime(ctx, rdb, updateTimeKey, detail.UpdateTime) {
+			return nil
 		}
-		rdb.Set(ctx, updateTimeKey, detail.UpdateTime, consts.OrderUpdateTimeTTL)
 	}
 
 	return s.saveOrderFull(ctx, shopID, detail)
@@ -669,4 +670,35 @@ func (s *OrderService) RefreshOrderFromAPI(ctx context.Context, shopID uint64, o
 	}
 
 	return s.saveOrder(ctx, shopID, &detailResp.Response.OrderList[0])
+}
+
+// checkAndSetUpdateTimeLua Lua脚本：原子性地检查并设置更新时间
+const checkAndSetUpdateTimeLua = `
+	local oldTime = redis.call('GET', KEYS[1])
+	if oldTime then
+		if tonumber(ARGV[1]) <= tonumber(oldTime) then
+			return 0
+		end
+	end
+	redis.call('SETEX', KEYS[1], ARGV[2], ARGV[1])
+	return 1
+`
+
+// checkAndSetUpdateTime 原子性地检查并设置更新时间
+func (s *OrderService) checkAndSetUpdateTime(ctx context.Context, rdb *redis.Client, key string, newTime int64) bool {
+	script := redis.NewScript(checkAndSetUpdateTimeLua)
+	result, err := script.Run(ctx, rdb, []string{key}, newTime, int(consts.OrderUpdateTimeTTL.Seconds())).Int()
+	if err != nil {
+		// 降级：使用非原子操作
+		cachedTime, err := rdb.Get(ctx, key).Result()
+		if err == nil {
+			oldTime, _ := strconv.ParseInt(cachedTime, 10, 64)
+			if newTime <= oldTime {
+				return false
+			}
+		}
+		rdb.Set(ctx, key, newTime, consts.OrderUpdateTimeTTL)
+		return true
+	}
+	return result == 1
 }

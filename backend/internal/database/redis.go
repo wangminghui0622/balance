@@ -7,10 +7,13 @@ import (
 
 	"balance/backend/internal/config"
 
+	"github.com/go-redsync/redsync/v4"
+	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
 	"github.com/redis/go-redis/v9"
 )
 
 var rdb *redis.Client
+var rs *redsync.Redsync
 
 // InitRedis 初始化Redis连接
 func InitRedis(cfg *config.RedisConfig) error {
@@ -28,6 +31,10 @@ func InitRedis(cfg *config.RedisConfig) error {
 		return fmt.Errorf("连接Redis失败: %w", err)
 	}
 
+	// 初始化 redsync 分布式锁
+	pool := goredis.NewPool(rdb)
+	rs = redsync.New(pool)
+
 	return nil
 }
 
@@ -42,4 +49,9 @@ func CloseRedis() error {
 		return rdb.Close()
 	}
 	return nil
+}
+
+// GetRedsync 获取 redsync 分布式锁管理器
+func GetRedsync() *redsync.Redsync {
+	return rs
 }

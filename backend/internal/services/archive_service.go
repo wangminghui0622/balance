@@ -7,14 +7,16 @@ import (
 	"time"
 
 	"balance/backend/internal/database"
+	"balance/backend/internal/utils"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/go-redsync/redsync/v4"
 	"gorm.io/gorm"
 )
 
 const (
 	archiveSchedulerLock = "archive:scheduler:lock"
 	archiveLockTTL       = 10 * time.Minute
+	archiveExtendInterval = archiveLockTTL / 3 // 续期间隔为TTL的1/3
 	
 	// 归档配置
 	OperationLogRetentionDays = 90  // 操作日志保留天数
@@ -23,30 +25,33 @@ const (
 
 // ArchiveService 归档服务
 type ArchiveService struct {
-	db  *gorm.DB
-	rdb *redis.Client
+	db *gorm.DB
+	rs *redsync.Redsync
 }
 
 // NewArchiveService 创建归档服务
 func NewArchiveService() *ArchiveService {
 	return &ArchiveService{
-		db:  database.GetDB(),
-		rdb: database.GetRedis(),
+		db: database.GetDB(),
+		rs: database.GetRedsync(),
 	}
 }
 
 // ArchiveOperationLogs 归档操作日志（将过期数据移动到归档表后删除）
 func (s *ArchiveService) ArchiveOperationLogs(ctx context.Context) (int64, error) {
-	// 获取分布式锁
-	ok, err := s.rdb.SetNX(ctx, archiveSchedulerLock, "1", archiveLockTTL).Result()
-	if err != nil {
-		return 0, fmt.Errorf("获取归档锁失败: %w", err)
-	}
-	if !ok {
+	// 使用 redsync 创建分布式锁
+	mutex := s.rs.NewMutex(archiveSchedulerLock,
+		redsync.WithExpiry(archiveLockTTL),
+		redsync.WithTries(1),
+	)
+
+	// 尝试获取锁并自动续期
+	cancel, acquired := utils.TryLockWithAutoExtend(ctx, mutex, archiveExtendInterval)
+	if !acquired {
 		log.Println("[Archive] 其他节点正在归档，跳过")
 		return 0, nil
 	}
-	defer s.rdb.Del(ctx, archiveSchedulerLock)
+	defer cancel()
 
 	log.Println("[Archive] 开始归档操作日志...")
 

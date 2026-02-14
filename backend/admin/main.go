@@ -35,27 +35,19 @@ func main() {
 	log.Println("MySQL连接成功")
 
 	// 自动迁移数据库表结构
+	// 注意：分表的表（orders_X, shipments_X 等）需要通过 database.sql 脚本创建
+	// 这里只迁移不分表的基础表
 	if err := database.GetDB().AutoMigrate(
-		// 用户与店铺
+		// 用户与店铺（不分表）
 		&models.Admin{},
 		&models.Shop{},
 		&models.ShopAuthorization{},
 		&models.ShopOperatorRelation{},
 		&models.ShopSyncRecord{},
-		// 订单相关
-		&models.Order{},
-		&models.OrderItem{},
-		&models.OrderAddress{},
-		&models.OrderEscrow{},
-		&models.OrderEscrowItem{},
-		&models.OrderSettlement{},
-		&models.OrderShipmentRecord{},
+		// 配置表（不分表）
 		&models.ProfitShareConfig{},
-		// 物流相关
-		&models.Shipment{},
 		&models.LogisticsChannel{},
-		// 财务相关
-		&models.FinanceIncome{},
+		// 账户表（不分表）
 		&models.PrepaymentAccount{},
 		&models.DepositAccount{},
 		&models.OperatorAccount{},
@@ -63,16 +55,19 @@ func main() {
 		&models.PlatformCommissionAccount{},
 		&models.PenaltyBonusAccount{},
 		&models.EscrowAccount{},
-		&models.AccountTransaction{},
 		&models.CollectionAccount{},
+		// 申请表（不分表）
 		&models.WithdrawApplication{},
 		&models.RechargeApplication{},
-		// 系统日志
-		&models.OperationLog{},
-		// 统计表
+		// 统计表（不分表）
 		&models.OrderDailyStat{},
 		&models.FinanceDailyStat{},
 		&models.PlatformDailyStat{},
+		// 以下表已分表，需通过 database.sql 创建：
+		// orders_0~9, order_items_0~9, order_addresses_0~9
+		// order_escrows_0~9, order_escrow_items_0~9, order_settlements_0~9
+		// order_shipment_records_0~9, shipments_0~9, finance_incomes_0~9
+		// operation_logs_0~9, account_transactions_0~9
 	); err != nil {
 		log.Printf("数据库迁移警告: %v", err)
 	} else {
@@ -107,7 +102,7 @@ func main() {
 	defer metricsCollector.Stop()
 
 	// 设置路由
-	r := router.SetupRouter(cfg.App.Mode)
+	r := router.SetupRouter(cfg.App.Mode, cfg)
 
 	// 启动服务器
 	addr := fmt.Sprintf(":%d", cfg.App.Port)

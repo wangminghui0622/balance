@@ -7,30 +7,35 @@ import (
 	"sync"
 	"time"
 
+	"balance/backend/internal/database"
 	"balance/backend/internal/services/shopower"
+	"balance/backend/internal/utils"
 
+	"github.com/go-redsync/redsync/v4"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
 const (
 	// Redis Keys
-	syncSchedulerLock = "sync:scheduler:lock"       // 调度器分布式锁
-	syncShopQueue     = "sync:shop:queue"           // 待同步店铺队列
-	syncShopLockKey   = "sync:shop:lock:%d"         // 店铺级别锁
+	syncSchedulerLock  = "sync:scheduler:lock"      // 调度器分布式锁
+	syncShopQueue      = "sync:shop:queue"          // 待同步店铺队列
+	syncShopLockKey    = "sync:shop:lock:%d"        // 店铺级别锁
 	syncShopProcessing = "sync:shop:processing"     // 正在处理的店铺集合
 
 	// 配置
-	schedulerLockTTL  = 60 * time.Second   // 调度器锁过期时间
-	shopLockTTL       = 5 * time.Minute    // 店铺锁过期时间
-	workerCount       = 10                 // 每台服务器的 Worker 数量
-	queuePopTimeout   = 30 * time.Second   // 队列阻塞等待超时
+	schedulerLockTTL      = 2 * time.Minute   // 调度器锁过期时间（调度任务较快）
+	shopLockTTL           = 10 * time.Minute  // 店铺锁过期时间（同步可能耗时较长）
+	shopLockExtendInterval = shopLockTTL / 3  // 续期间隔
+	workerCount           = 10                // 每台服务器的 Worker 数量
+	queuePopTimeout       = 30 * time.Second  // 队列阻塞等待超时
 )
 
 // DistributedSyncScheduler 分布式同步调度器
 type DistributedSyncScheduler struct {
 	db           *gorm.DB
 	rdb          *redis.Client
+	rs           *redsync.Redsync
 	orderService *shopower.OrderService
 	shopService  *shopower.ShopService
 	interval     time.Duration
@@ -45,6 +50,7 @@ func NewDistributedSyncScheduler(db *gorm.DB, rdb *redis.Client) *DistributedSyn
 	return &DistributedSyncScheduler{
 		db:           db,
 		rdb:          rdb,
+		rs:           database.GetRedsync(),
 		orderService: shopower.NewOrderService(),
 		shopService:  shopower.NewShopService(),
 		interval:     30 * time.Minute,
@@ -114,19 +120,18 @@ func (s *DistributedSyncScheduler) runScheduler() {
 func (s *DistributedSyncScheduler) trySchedule() {
 	ctx := context.Background()
 
-	// 尝试获取调度器锁 (只有一个节点能获取)
-	ok, err := s.rdb.SetNX(ctx, syncSchedulerLock, "1", schedulerLockTTL).Result()
-	if err != nil {
-		log.Printf("[DistributedSync] 获取调度器锁失败: %v", err)
-		return
-	}
-	if !ok {
-		// 其他节点已经在调度，跳过
+	// 使用 redsync 创建调度器锁
+	mutex := s.rs.NewMutex(syncSchedulerLock,
+		redsync.WithExpiry(schedulerLockTTL),
+		redsync.WithTries(1),
+	)
+
+	// 尝试获取锁
+	if err := mutex.TryLockContext(ctx); err != nil {
 		log.Println("[DistributedSync] 其他节点正在调度，跳过")
 		return
 	}
-
-	defer s.rdb.Del(ctx, syncSchedulerLock)
+	defer mutex.Unlock()
 
 	log.Println("[DistributedSync] 获取调度器锁成功，开始分配任务...")
 
@@ -176,44 +181,50 @@ func (s *DistributedSyncScheduler) runWorker(workerID int) {
 }
 
 // processOneShop 处理一个店铺
+// 从队列取任务，获取锁，执行同步
 func (s *DistributedSyncScheduler) processOneShop(workerID int) {
 	ctx := context.Background()
 
-	// 从队列中阻塞获取任务
-	result, err := s.rdb.BRPop(ctx, queuePopTimeout, syncShopQueue).Result()
+	// 从队列取出一个店铺ID
+	result, err := s.rdb.RPop(ctx, syncShopQueue).Result()
 	if err != nil {
 		if err == redis.Nil {
-			// 超时，没有任务，继续等待
+			// 队列为空，等待一段时间后重试
+			time.Sleep(queuePopTimeout)
 			return
 		}
-		log.Printf("[Worker-%d] 获取任务失败: %v", workerID, err)
+		log.Printf("[Worker-%d] 从队列取任务失败: %v", workerID, err)
+		time.Sleep(time.Second)
 		return
 	}
 
-	// result[0] 是 key，result[1] 是 value
-	shopIDStr := result[1]
 	var shopID uint64
-	fmt.Sscanf(shopIDStr, "%d", &shopID)
+	fmt.Sscanf(result, "%d", &shopID)
 
-	// 尝试获取店铺锁
+	// 使用 redsync 创建店铺锁
 	lockKey := fmt.Sprintf(syncShopLockKey, shopID)
-	ok, err := s.rdb.SetNX(ctx, lockKey, "1", shopLockTTL).Result()
-	if err != nil {
-		log.Printf("[Worker-%d] 获取店铺锁失败: %v", workerID, err)
-		return
-	}
-	if !ok {
-		// 其他 Worker 正在处理这个店铺，跳过
-		log.Printf("[Worker-%d] 店铺 %d 正在被其他Worker处理，跳过", workerID, shopID)
-		return
-	}
+	mutex := s.rs.NewMutex(lockKey,
+		redsync.WithExpiry(shopLockTTL),
+		redsync.WithTries(1),
+	)
 
-	// 确保释放锁
-	defer s.rdb.Del(ctx, lockKey)
+	// 尝试获取锁并自动续期
+	unlockFunc, acquired := utils.TryLockWithAutoExtend(ctx, mutex, shopLockExtendInterval)
+	if !acquired {
+		// 获取锁失败，将任务放回队列头部
+		s.rdb.LPush(ctx, syncShopQueue, shopID)
+		time.Sleep(100 * time.Millisecond)
+		return
+	}
 
 	// 标记正在处理
 	s.rdb.SAdd(ctx, syncShopProcessing, shopID)
-	defer s.rdb.SRem(ctx, syncShopProcessing, shopID)
+
+	// 确保释放锁和移除处理标记
+	defer func() {
+		unlockFunc()
+		s.rdb.SRem(ctx, syncShopProcessing, shopID)
+	}()
 
 	// 执行增量同步
 	s.syncShopOrders(workerID, shopID)
@@ -223,7 +234,9 @@ func (s *DistributedSyncScheduler) processOneShop(workerID int) {
 func (s *DistributedSyncScheduler) syncShopOrders(workerID int, shopID uint64) {
 	log.Printf("[Worker-%d] 开始同步店铺 %d", workerID, shopID)
 
-	ctx := context.Background()
+	// context超时应小于锁TTL，确保任务在锁过期前完成
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
 
 	// 获取店铺信息，包括上次同步时间
 	shop, err := s.shopService.GetShopByID(shopID)

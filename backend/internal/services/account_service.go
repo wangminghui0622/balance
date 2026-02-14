@@ -10,6 +10,7 @@ import (
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // AccountService 账户服务
@@ -82,7 +83,8 @@ func (s *AccountService) RechargePrepayment(ctx context.Context, adminID int64, 
 	var tx *models.AccountTransaction
 	err := s.db.Transaction(func(db *gorm.DB) error {
 		var account models.PrepaymentAccount
-		if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发更新
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				account = models.PrepaymentAccount{
 					AdminID:  adminID,
@@ -132,7 +134,8 @@ func (s *AccountService) FreezePrepayment(ctx context.Context, adminID int64, am
 	var tx *models.AccountTransaction
 	err := s.db.Transaction(func(db *gorm.DB) error {
 		var account models.PrepaymentAccount
-		if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发更新
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			return fmt.Errorf("预付款账户不存在")
 		}
 
@@ -179,7 +182,8 @@ func (s *AccountService) UnfreezePrepayment(ctx context.Context, adminID int64, 
 	var tx *models.AccountTransaction
 	err := s.db.Transaction(func(db *gorm.DB) error {
 		var account models.PrepaymentAccount
-		if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发更新
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			return fmt.Errorf("预付款账户不存在")
 		}
 
@@ -222,7 +226,8 @@ func (s *AccountService) SettlePrepayment(ctx context.Context, adminID int64, am
 	var tx *models.AccountTransaction
 	err := s.db.Transaction(func(db *gorm.DB) error {
 		var account models.PrepaymentAccount
-		if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发更新
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			return fmt.Errorf("预付款账户不存在")
 		}
 
@@ -291,7 +296,8 @@ func (s *AccountService) AddOperatorIncome(ctx context.Context, adminID int64, a
 	var tx *models.AccountTransaction
 	err := s.db.Transaction(func(db *gorm.DB) error {
 		var account models.OperatorAccount
-		if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发更新
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				account = models.OperatorAccount{
 					AdminID:  adminID,
@@ -367,7 +373,8 @@ func (s *AccountService) PayDeposit(ctx context.Context, adminID int64, amount d
 	var tx *models.AccountTransaction
 	err := s.db.Transaction(func(db *gorm.DB) error {
 		var account models.DepositAccount
-		if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发更新
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				account = models.DepositAccount{
 					AdminID:  adminID,
@@ -462,7 +469,8 @@ func (s *AccountService) AddShopOwnerCommission(ctx context.Context, adminID int
 	var tx *models.AccountTransaction
 	err := s.db.Transaction(func(db *gorm.DB) error {
 		var account models.ShopOwnerCommissionAccount
-		if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发更新
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				account = models.ShopOwnerCommissionAccount{
 					AdminID:  adminID,
@@ -535,7 +543,8 @@ func (s *AccountService) AddPlatformCommission(ctx context.Context, amount decim
 	var tx *models.AccountTransaction
 	err := s.db.Transaction(func(db *gorm.DB) error {
 		var account models.PlatformCommissionAccount
-		if err := db.First(&account).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发更新
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				account = models.PlatformCommissionAccount{
 					Currency: "TWD",
@@ -606,7 +615,8 @@ func (s *AccountService) TransferToEscrow(ctx context.Context, amount decimal.De
 
 	return s.db.Transaction(func(db *gorm.DB) error {
 		var account models.EscrowAccount
-		if err := db.First(&account).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发更新
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				account = models.EscrowAccount{
 					Currency: "TWD",
@@ -634,7 +644,8 @@ func (s *AccountService) TransferFromEscrow(ctx context.Context, amount decimal.
 
 	return s.db.Transaction(func(db *gorm.DB) error {
 		var account models.EscrowAccount
-		if err := db.First(&account).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发更新
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account).Error; err != nil {
 			return fmt.Errorf("托管账户不存在")
 		}
 
@@ -735,7 +746,8 @@ func (s *AccountService) freezeForWithdraw(ctx context.Context, adminID int64, a
 		switch accountType {
 		case models.AccountTypeOperator:
 			var account models.OperatorAccount
-			if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+			// 使用 FOR UPDATE 行锁防止并发更新
+			if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 				return err
 			}
 			if account.Balance.LessThan(amount) {
@@ -747,7 +759,8 @@ func (s *AccountService) freezeForWithdraw(ctx context.Context, adminID int64, a
 
 		case models.AccountTypeShopOwnerCommission:
 			var account models.ShopOwnerCommissionAccount
-			if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+			// 使用 FOR UPDATE 行锁防止并发更新
+			if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 				return err
 			}
 			if account.Balance.LessThan(amount) {
@@ -759,7 +772,8 @@ func (s *AccountService) freezeForWithdraw(ctx context.Context, adminID int64, a
 
 		case models.AccountTypeDeposit:
 			var account models.DepositAccount
-			if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+			// 使用 FOR UPDATE 行锁防止并发更新
+			if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 				return err
 			}
 			minDeposit := decimal.NewFromInt(15000)
@@ -777,7 +791,8 @@ func (s *AccountService) freezeForWithdraw(ctx context.Context, adminID int64, a
 func (s *AccountService) ApproveWithdraw(ctx context.Context, applicationID uint64, auditBy int64, auditRemark string) error {
 	return s.db.Transaction(func(db *gorm.DB) error {
 		var application models.WithdrawApplication
-		if err := db.Where("id = ? AND status = ?", applicationID, models.ApplicationStatusPending).First(&application).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发审批
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ?", applicationID, models.ApplicationStatusPending).First(&application).Error; err != nil {
 			return fmt.Errorf("提现申请不存在或已处理")
 		}
 
@@ -795,7 +810,8 @@ func (s *AccountService) ApproveWithdraw(ctx context.Context, applicationID uint
 func (s *AccountService) RejectWithdraw(ctx context.Context, applicationID uint64, auditBy int64, auditRemark string) error {
 	return s.db.Transaction(func(db *gorm.DB) error {
 		var application models.WithdrawApplication
-		if err := db.Where("id = ? AND status = ?", applicationID, models.ApplicationStatusPending).First(&application).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发审批
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ?", applicationID, models.ApplicationStatusPending).First(&application).Error; err != nil {
 			return fmt.Errorf("提现申请不存在或已处理")
 		}
 
@@ -820,7 +836,8 @@ func (s *AccountService) unfreezeForWithdraw(ctx context.Context, adminID int64,
 		switch accountType {
 		case models.AccountTypeOperator:
 			var account models.OperatorAccount
-			if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+			// 使用 FOR UPDATE 行锁防止并发更新
+			if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 				return err
 			}
 			account.Balance = account.Balance.Add(amount)
@@ -829,7 +846,8 @@ func (s *AccountService) unfreezeForWithdraw(ctx context.Context, adminID int64,
 
 		case models.AccountTypeShopOwnerCommission:
 			var account models.ShopOwnerCommissionAccount
-			if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+			// 使用 FOR UPDATE 行锁防止并发更新
+			if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 				return err
 			}
 			account.Balance = account.Balance.Add(amount)
@@ -838,7 +856,8 @@ func (s *AccountService) unfreezeForWithdraw(ctx context.Context, adminID int64,
 
 		case models.AccountTypeDeposit:
 			var account models.DepositAccount
-			if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+			// 使用 FOR UPDATE 行锁防止并发更新
+			if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 				return err
 			}
 			account.Balance = account.Balance.Add(amount)
@@ -852,7 +871,8 @@ func (s *AccountService) unfreezeForWithdraw(ctx context.Context, adminID int64,
 func (s *AccountService) ConfirmWithdrawPaid(ctx context.Context, applicationID uint64, operatorID int64) error {
 	return s.db.Transaction(func(db *gorm.DB) error {
 		var application models.WithdrawApplication
-		if err := db.Where("id = ? AND status = ?", applicationID, models.ApplicationStatusApproved).First(&application).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发操作
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ?", applicationID, models.ApplicationStatusApproved).First(&application).Error; err != nil {
 			return fmt.Errorf("提现申请不存在或状态不正确")
 		}
 
@@ -877,7 +897,8 @@ func (s *AccountService) completeWithdraw(ctx context.Context, adminID int64, ac
 		switch accountType {
 		case models.AccountTypeOperator:
 			var account models.OperatorAccount
-			if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+			// 使用 FOR UPDATE 行锁防止并发更新
+			if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 				return err
 			}
 			balanceBefore = account.Balance
@@ -889,7 +910,8 @@ func (s *AccountService) completeWithdraw(ctx context.Context, adminID int64, ac
 
 		case models.AccountTypeShopOwnerCommission:
 			var account models.ShopOwnerCommissionAccount
-			if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+			// 使用 FOR UPDATE 行锁防止并发更新
+			if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 				return err
 			}
 			balanceBefore = account.Balance
@@ -901,7 +923,8 @@ func (s *AccountService) completeWithdraw(ctx context.Context, adminID int64, ac
 
 		case models.AccountTypeDeposit:
 			var account models.DepositAccount
-			if err := db.Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+			// 使用 FOR UPDATE 行锁防止并发更新
+			if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 				return err
 			}
 			balanceBefore = account.Balance
@@ -979,7 +1002,8 @@ func (s *AccountService) ApplyRecharge(ctx context.Context, adminID int64, accou
 func (s *AccountService) ApproveRecharge(ctx context.Context, applicationID uint64, auditBy int64, auditRemark string) error {
 	return s.db.Transaction(func(db *gorm.DB) error {
 		var application models.RechargeApplication
-		if err := db.Where("id = ? AND status = ?", applicationID, models.ApplicationStatusPending).First(&application).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发审批
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ?", applicationID, models.ApplicationStatusPending).First(&application).Error; err != nil {
 			return fmt.Errorf("充值申请不存在或已处理")
 		}
 
@@ -1009,7 +1033,8 @@ func (s *AccountService) ApproveRecharge(ctx context.Context, applicationID uint
 func (s *AccountService) RejectRecharge(ctx context.Context, applicationID uint64, auditBy int64, auditRemark string) error {
 	return s.db.Transaction(func(db *gorm.DB) error {
 		var application models.RechargeApplication
-		if err := db.Where("id = ? AND status = ?", applicationID, models.ApplicationStatusPending).First(&application).Error; err != nil {
+		// 使用 FOR UPDATE 行锁防止并发审批
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ?", applicationID, models.ApplicationStatusPending).First(&application).Error; err != nil {
 			return fmt.Errorf("充值申请不存在或已处理")
 		}
 
