@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"balance/backend/internal/utils"
 	"context"
 	"fmt"
 	"log"
@@ -25,6 +26,7 @@ type FinanceSyncService struct {
 	pool        *ants.Pool
 	ctx         context.Context
 	cancel      context.CancelFunc
+	idGenerator *utils.IDGenerator
 }
 
 // NewFinanceSyncService 创建财务同步服务
@@ -48,6 +50,7 @@ func NewFinanceSyncService(workerCount int) *FinanceSyncService {
 		pool:        pool,
 		ctx:         ctx,
 		cancel:      cancel,
+		idGenerator: utils.NewIDGenerator(database.GetRedis()),
 	}
 }
 
@@ -82,7 +85,9 @@ func (s *FinanceSyncService) ScheduleAllShops() {
 
 		if err == gorm.ErrRecordNotFound {
 			// 创建同步记录
+			ShopSyncRecordid, _ := s.idGenerator.GenerateShopSyncRecordID(s.ctx)
 			record = models.ShopSyncRecord{
+				ID:       uint64(ShopSyncRecordid),
 				ShopID:   shop.ShopID,
 				SyncType: models.SyncTypeFinanceIncome,
 				Status:   models.SyncStatusEnabled,

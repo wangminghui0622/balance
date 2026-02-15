@@ -44,15 +44,25 @@ type DistributedSyncScheduler struct {
 	wg           sync.WaitGroup
 	running      bool
 	mu           sync.Mutex
+	logger       *log.Logger // 文件日志
 }
 
 // NewDistributedSyncScheduler 创建分布式同步调度器
-func NewDistributedSyncScheduler(db *gorm.DB, rdb *redis.Client) *DistributedSyncScheduler {
+// logger: 可选的文件日志，传nil则使用标准log
+func NewDistributedSyncScheduler(db *gorm.DB, rdb *redis.Client, logger ...*log.Logger) *DistributedSyncScheduler {
+	// 使用传入的logger或默认标准log
+	var l *log.Logger
+	if len(logger) > 0 && logger[0] != nil {
+		l = logger[0]
+	} else {
+		l = log.Default()
+	}
+
 	// 创建 ants 协程池
 	pool, err := ants.NewPool(workerCount,
 		ants.WithPreAlloc(true),
 		ants.WithPanicHandler(func(p interface{}) {
-			log.Printf("[DistributedSync] Worker panic: %v", p)
+			l.Printf("[DistributedSync] Worker panic: %v", p)
 		}),
 	)
 	if err != nil {
@@ -68,6 +78,7 @@ func NewDistributedSyncScheduler(db *gorm.DB, rdb *redis.Client) *DistributedSyn
 		pool:         pool,
 		interval:     30 * time.Minute,
 		stopChan:     make(chan struct{}),
+		logger:       l,
 	}
 }
 
@@ -89,7 +100,7 @@ func (s *DistributedSyncScheduler) Start() {
 	s.wg.Add(1)
 	go s.runDispatcher()
 
-	log.Printf("[DistributedSync] 分布式同步已启动，协程池大小: %d", workerCount)
+	s.logger.Printf("[DistributedSync] 分布式同步已启动，协程池大小: %d", workerCount)
 }
 
 // Stop 停止分布式同步
@@ -108,7 +119,7 @@ func (s *DistributedSyncScheduler) Stop() {
 	// 释放协程池
 	s.pool.Release()
 
-	log.Println("[DistributedSync] 分布式同步已停止")
+	s.logger.Println("[DistributedSync] 分布式同步已停止")
 }
 
 // runScheduler 运行调度器 (尝试成为主节点)
@@ -143,22 +154,22 @@ func (s *DistributedSyncScheduler) trySchedule() {
 
 	// 尝试获取锁
 	if err := mutex.TryLockContext(ctx); err != nil {
-		log.Println("[DistributedSync] 其他节点正在调度，跳过")
+		s.logger.Println("[DistributedSync] 其他节点正在调度，跳过")
 		return
 	}
 	defer mutex.Unlock()
 
-	log.Println("[DistributedSync] 获取调度器锁成功，开始分配任务...")
+	s.logger.Println("[DistributedSync] 获取调度器锁成功，开始分配任务...")
 
 	// 获取所有需要同步的店铺
 	shops, err := s.shopService.GetAuthorizedShops()
 	if err != nil {
-		log.Printf("[DistributedSync] 获取店铺列表失败: %v", err)
+		s.logger.Printf("[DistributedSync] 获取店铺列表失败: %v", err)
 		return
 	}
 
 	if len(shops) == 0 {
-		log.Println("[DistributedSync] 没有需要同步的店铺")
+		s.logger.Println("[DistributedSync] 没有需要同步的店铺")
 		return
 	}
 
@@ -171,23 +182,23 @@ func (s *DistributedSyncScheduler) trySchedule() {
 	}
 	_, err = pipe.Exec(ctx)
 	if err != nil {
-		log.Printf("[DistributedSync] 推入任务队列失败: %v", err)
+		s.logger.Printf("[DistributedSync] 推入任务队列失败: %v", err)
 		return
 	}
 
-	log.Printf("[DistributedSync] 已将 %d 个店铺推入同步队列", len(shops))
+	s.logger.Printf("[DistributedSync] 已将 %d 个店铺推入同步队列", len(shops))
 }
 
 // runDispatcher 任务分发器：从队列取任务并提交到协程池
 func (s *DistributedSyncScheduler) runDispatcher() {
 	defer s.wg.Done()
 
-	log.Println("[Dispatcher] 启动")
+	s.logger.Println("[Dispatcher] 启动")
 
 	for {
 		select {
 		case <-s.stopChan:
-			log.Println("[Dispatcher] 停止")
+			s.logger.Println("[Dispatcher] 停止")
 			return
 		default:
 			s.dispatchOneTask()
@@ -207,7 +218,7 @@ func (s *DistributedSyncScheduler) dispatchOneTask() {
 			time.Sleep(queuePopTimeout)
 			return
 		}
-		log.Printf("[Dispatcher] 从队列取任务失败: %v", err)
+		s.logger.Printf("[Dispatcher] 从队列取任务失败: %v", err)
 		time.Sleep(time.Second)
 		return
 	}
@@ -221,7 +232,7 @@ func (s *DistributedSyncScheduler) dispatchOneTask() {
 	})
 	if err != nil {
 		// 提交失败，将任务放回队列
-		log.Printf("[Dispatcher] 提交任务到协程池失败: %v", err)
+		s.logger.Printf("[Dispatcher] 提交任务到协程池失败: %v", err)
 		s.rdb.LPush(ctx, syncShopQueue, shopID)
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -265,7 +276,7 @@ const orderSyncTaskTimeout = 8 * time.Minute
 // syncShopOrders 同步店铺订单 (增量)
 func (s *DistributedSyncScheduler) syncShopOrders(shopID uint64) {
 	startTime := time.Now()
-	log.Printf("[Sync] 开始同步店铺 %d", shopID)
+	s.logger.Printf("[Sync] 开始同步店铺 %d", shopID)
 
 	// 创建任务级超时 context
 	ctx, cancel := context.WithTimeout(context.Background(), orderSyncTaskTimeout)
@@ -274,7 +285,7 @@ func (s *DistributedSyncScheduler) syncShopOrders(shopID uint64) {
 	// 获取店铺信息，包括上次同步时间
 	shop, err := s.shopService.GetShopByID(shopID)
 	if err != nil {
-		log.Printf("[Sync] 获取店铺 %d 信息失败: %v", shopID, err)
+		s.logger.Printf("[Sync] 获取店铺 %d 信息失败: %v", shopID, err)
 		return
 	}
 
@@ -293,13 +304,13 @@ func (s *DistributedSyncScheduler) syncShopOrders(shopID uint64) {
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			log.Printf("[Sync] 店铺 %d 同步任务超时（耗时 %v，超时限制 %v）", shopID, elapsed, orderSyncTaskTimeout)
+			s.logger.Printf("[Sync] 店铺 %d 同步任务超时（耗时 %v，超时限制 %v）", shopID, elapsed, orderSyncTaskTimeout)
 		} else {
-			log.Printf("[Sync] 店铺 %d 同步失败（耗时 %v）: %v", shopID, elapsed, err)
+			s.logger.Printf("[Sync] 店铺 %d 同步失败（耗时 %v）: %v", shopID, elapsed, err)
 		}
 		return
 	}
-	log.Printf("[Sync] 店铺 %d 同步完成，新增/更新 %d 条订单（耗时 %v）", shopID, count, elapsed)
+	s.logger.Printf("[Sync] 店铺 %d 同步完成，新增/更新 %d 条订单（耗时 %v）", shopID, count, elapsed)
 }
 
 // GetQueueLength 获取队列长度 (用于监控)

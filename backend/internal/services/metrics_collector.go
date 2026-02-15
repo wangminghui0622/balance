@@ -18,21 +18,30 @@ type MetricsCollector struct {
 	interval time.Duration
 	stopChan chan struct{}
 	doneChan chan struct{} // 用于等待goroutine结束
+	logger   *log.Logger  // 文件日志
 }
 
 // NewMetricsCollector 创建指标收集器
-func NewMetricsCollector() *MetricsCollector {
+// logger: 可选的文件日志，传nil则使用标准log
+func NewMetricsCollector(logger ...*log.Logger) *MetricsCollector {
+	var l *log.Logger
+	if len(logger) > 0 && logger[0] != nil {
+		l = logger[0]
+	} else {
+		l = log.Default()
+	}
 	return &MetricsCollector{
 		db:       database.GetDB(),
 		interval: 1 * time.Minute,
 		stopChan: make(chan struct{}),
 		doneChan: make(chan struct{}),
+		logger:   l,
 	}
 }
 
 // Start 启动指标收集
 func (m *MetricsCollector) Start() {
-	log.Println("[Metrics] 启动指标收集器...")
+	m.logger.Println("[Metrics] 启动指标收集器...")
 	go m.collect()
 }
 
@@ -40,7 +49,7 @@ func (m *MetricsCollector) Start() {
 func (m *MetricsCollector) Stop() {
 	close(m.stopChan)
 	<-m.doneChan // 等待collect goroutine结束
-	log.Println("[Metrics] 指标收集器已停止")
+	m.logger.Println("[Metrics] 指标收集器已停止")
 }
 
 func (m *MetricsCollector) collect() {
@@ -64,6 +73,8 @@ func (m *MetricsCollector) collect() {
 
 func (m *MetricsCollector) collectMetrics() {
 	ctx := context.Background()
+	start := time.Now()
+	m.logger.Println("[Metrics] 开始收集指标...")
 
 	// 收集分表数据量
 	m.collectShardTableMetrics()
@@ -73,6 +84,8 @@ func (m *MetricsCollector) collectMetrics() {
 
 	// 收集Redis队列状态
 	m.collectRedisQueueMetrics(ctx)
+
+	m.logger.Printf("[Metrics] 指标收集完成，耗时 %v", time.Since(start))
 }
 
 // collectShardTableMetrics 收集分表数据量指标

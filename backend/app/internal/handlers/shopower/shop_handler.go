@@ -132,7 +132,7 @@ func (h *ShopHandler) BindShop(c *gin.Context) {
 		utils.Unauthorized(c, "未登录")
 		return
 	}
-
+	fmt.Println("*************绑定中**************",userID)
 	var req struct {
 		ShopID int64 `json:"shop_id" binding:"required"`
 	}

@@ -18,13 +18,15 @@ import (
 
 // ShopService 店铺服务（店主专用）
 type ShopService struct {
-	db *gorm.DB
+	db          *gorm.DB
+	idGenerator *utils.IDGenerator
 }
 
 // NewShopService 创建店铺服务
 func NewShopService() *ShopService {
 	return &ShopService{
-		db: database.GetDB(),
+		db:          database.GetDB(),
+		idGenerator: utils.NewIDGenerator(database.GetRedis()),
 	}
 }
 
@@ -66,8 +68,9 @@ func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopI
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var existingShop models.Shop
 		err := tx.Where("shop_id = ?", shopID).First(&existingShop).Error
-
+		authId := uint64(0)
 		if err == nil {
+			authId = existingShop.ShopID
 			updates := map[string]interface{}{
 				"shop_name":          shopInfo.Response.ShopName,
 				"shop_id_str":        fmt.Sprintf("%d", shopID),
@@ -87,7 +90,10 @@ func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopI
 				return fmt.Errorf("更新店铺信息失败: %w", err)
 			}
 		} else if err == gorm.ErrRecordNotFound {
+			shopId, _ := s.idGenerator.GenerateShopID(ctx)
+			authId = uint64(shopId)
 			shop := models.Shop{
+				ID:               uint64(shopId),
 				ShopID:           uint64(shopID),
 				ShopIDStr:        fmt.Sprintf("%d", shopID),
 				AdminID:          adminID,
@@ -123,6 +129,7 @@ func (s *ShopService) HandleAuthCallback(ctx context.Context, code string, shopI
 		} else {
 			// 创建新授权信息
 			auth := models.ShopAuthorization{
+				ID:               authId,
 				ShopID:           uint64(shopID),
 				AccessToken:      tokenResp.AccessToken,
 				RefreshToken:     tokenResp.RefreshToken,
