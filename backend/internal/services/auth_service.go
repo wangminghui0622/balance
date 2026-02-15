@@ -112,11 +112,9 @@ func (s *AuthService) Register(ctx context.Context, req *RegisterRequest) error 
 	if err != nil {
 		return fmt.Errorf("生成用户ID失败: %w", err)
 	}
-
 	salt := generateSalt(8)
 	hash := hashPassword(req.Password, salt)
 	userNo := utils.GenerateUserNo(userID)
-
 	admin := models.Admin{
 		ID:       userID,
 		UserNo:   userNo,
@@ -132,11 +130,9 @@ func (s *AuthService) Register(ctx context.Context, req *RegisterRequest) error 
 		Status:   models.UserStatusNormal,
 		Language: "zh",
 	}
-
 	if err := s.db.Create(&admin).Error; err != nil {
 		return fmt.Errorf("创建用户失败: %w", err)
 	}
-
 	return nil
 }
 

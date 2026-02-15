@@ -41,8 +41,9 @@ func (s *Scheduler) Start() {
 	// 启动财务同步服务
 	s.financeSyncService.Start()
 
-	// 每5分钟调度一次所有店铺的财务同步（带分布式锁）
-	_, err := s.cron.AddFunc("0 */5 * * * *", func() {
+	// 每小时调度一次所有店铺的财务同步（带分布式锁）
+	// 虾皮打款通常在订单完成后几天结算，无需频繁同步
+	_, err := s.cron.AddFunc("0 0 * * * *", func() {
 		s.tryScheduleWithLock()
 	})
 	if err != nil {

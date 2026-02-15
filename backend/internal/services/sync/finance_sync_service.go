@@ -4,78 +4,82 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sync"
 	"time"
 
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
+	"balance/backend/internal/ratelimit"
 	"balance/backend/internal/shopee"
 
+	"github.com/panjf2000/ants/v2"
 	"github.com/shopspring/decimal"
-	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 // FinanceSyncService 财务收入增量同步服务
 type FinanceSyncService struct {
-	db           *gorm.DB
-	shardedDB    *database.ShardedDB
-	limiters     sync.Map // map[uint64]*rate.Limiter
-	workerCount  int
-	taskChan     chan models.SyncTask
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
+	db          *gorm.DB
+	shardedDB   *database.ShardedDB
+	workerCount int
+	pool        *ants.Pool
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 // NewFinanceSyncService 创建财务同步服务
 func NewFinanceSyncService(workerCount int) *FinanceSyncService {
 	ctx, cancel := context.WithCancel(context.Background())
 	db := database.GetDB()
+
+	// 创建 ants 协程池
+	pool, err := ants.NewPool(workerCount,
+		ants.WithPreAlloc(true),
+		ants.WithNonblocking(false), // 队列满时阻塞等待
+	)
+	if err != nil {
+		log.Fatalf("创建财务同步协程池失败: %v", err)
+	}
+
 	return &FinanceSyncService{
 		db:          db,
 		shardedDB:   database.NewShardedDB(db),
 		workerCount: workerCount,
-		taskChan:    make(chan models.SyncTask, 1000),
+		pool:        pool,
 		ctx:         ctx,
 		cancel:      cancel,
 	}
 }
 
 // Start 启动同步服务
+// 使用 ants 协程池后，不再需要预先启动 worker goroutine
+// 任务通过 ScheduleAllShops() 提交到协程池时自动分配 goroutine 执行
 func (s *FinanceSyncService) Start() {
-	log.Printf("启动财务同步服务，Worker数量: %d", s.workerCount)
-	for i := 0; i < s.workerCount; i++ {
-		s.wg.Add(1)
-		go s.worker(i)
-	}
+	log.Printf("启动财务同步服务，协程池大小: %d，当前运行: %d，空闲: %d",
+		s.workerCount, s.pool.Running(), s.pool.Free())
 }
 
 // Stop 停止同步服务
 func (s *FinanceSyncService) Stop() {
 	log.Println("停止财务同步服务...")
 	s.cancel()
-	close(s.taskChan)
-	s.wg.Wait()
+	s.pool.Release()
 	log.Println("财务同步服务已停止")
 }
 
 // ScheduleAllShops 调度所有店铺的同步任务
 func (s *FinanceSyncService) ScheduleAllShops() {
 	var shops []models.Shop
-	if err := s.db.Where("status = ?", 1).Find(&shops).Error; err != nil {
+	if err := s.db.Where("status = ?", models.ShopStatusEnabled).Find(&shops).Error; err != nil {
 		log.Printf("获取店铺列表失败: %v", err)
 		return
 	}
-
 	log.Printf("开始调度 %d 个店铺的财务同步任务", len(shops))
-
 	for _, shop := range shops {
 		// 检查同步记录状态
 		var record models.ShopSyncRecord
 		err := s.db.Where("shop_id = ? AND sync_type = ?", shop.ShopID, models.SyncTypeFinanceIncome).First(&record).Error
-		
+
 		if err == gorm.ErrRecordNotFound {
 			// 创建同步记录
 			record = models.ShopSyncRecord{
@@ -94,48 +98,46 @@ func (s *FinanceSyncService) ScheduleAllShops() {
 			continue
 		}
 
-		// 添加到任务队列
-		select {
-		case s.taskChan <- models.SyncTask{
+		// 提交任务到协程池
+		task := models.SyncTask{
 			ShopID:   shop.ShopID,
 			SyncType: models.SyncTypeFinanceIncome,
-		}:
-		default:
-			log.Printf("任务队列已满，跳过店铺 %d", shop.ShopID)
 		}
-	}
-}
-
-// worker 工作协程
-func (s *FinanceSyncService) worker(id int) {
-	defer s.wg.Done()
-	log.Printf("Worker %d 启动", id)
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			log.Printf("Worker %d 退出", id)
-			return
-		case task, ok := <-s.taskChan:
-			if !ok {
-				return
-			}
+		err = s.pool.Submit(func() {
 			s.processTask(task)
+		})
+		if err != nil {
+			log.Printf("提交任务到协程池失败: %v", err)
 		}
 	}
 }
 
-// processTask 处理同步任务
+// 任务超时时间
+const taskTimeout = 5 * time.Minute
+
+// processTask 处理同步任务（在协程池中执行）
 func (s *FinanceSyncService) processTask(task models.SyncTask) {
-	limiter := s.getShopLimiter(task.ShopID)
-	
-	// 等待限流
-	if err := limiter.Wait(s.ctx); err != nil {
+	// 检查服务是否已停止
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
+	// 创建任务级超时 context
+	taskCtx, cancel := context.WithTimeout(s.ctx, taskTimeout)
+	defer cancel()
+
+	// 等待限流（使用 Sentinel）
+	if err := s.waitForRateLimit(taskCtx, task.ShopID); err != nil {
+		if taskCtx.Err() == context.DeadlineExceeded {
+			log.Printf("店铺 %d 同步任务超时（限流等待阶段）", task.ShopID)
+		}
 		return
 	}
 
-	count, err := s.syncShopFinance(s.ctx, task.ShopID)
-	
+	count, err := s.syncShopFinance(taskCtx, task.ShopID)
+
 	// 更新同步记录
 	now := time.Now()
 	updates := map[string]interface{}{
@@ -195,9 +197,8 @@ func (s *FinanceSyncService) syncShopFinance(ctx context.Context, shopID uint64)
 	maxTransactionTime := record.LastSyncTime
 
 	for {
-		// 限流等待
-		limiter := s.getShopLimiter(shopID)
-		if err := limiter.Wait(ctx); err != nil {
+		// 限流等待（使用 Sentinel）
+		if err := s.waitForRateLimit(ctx, shopID); err != nil {
 			break
 		}
 
@@ -275,7 +276,7 @@ func (s *FinanceSyncService) syncShopFinance(ctx context.Context, shopID uint64)
 		}
 
 		pageNo++
-		
+
 		// 避免请求过快
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -316,15 +317,12 @@ func (s *FinanceSyncService) refreshToken(ctx context.Context, shopID uint64, au
 	return nil
 }
 
-// getShopLimiter 获取店铺限流器
-func (s *FinanceSyncService) getShopLimiter(shopID uint64) *rate.Limiter {
-	if limiter, ok := s.limiters.Load(shopID); ok {
-		return limiter.(*rate.Limiter)
-	}
-	// 每秒5次请求，突发10次
-	limiter := rate.NewLimiter(5, 10)
-	s.limiters.Store(shopID, limiter)
-	return limiter
+// waitForRateLimit 等待限流通过（使用 Sentinel）
+func (s *FinanceSyncService) waitForRateLimit(ctx context.Context, shopID uint64) error {
+	// 加载财务同步限流规则（每秒5次请求）
+	ratelimit.LoadFinanceSyncRules(shopID, 5, 10)
+	resourceName := ratelimit.FinanceSyncResourceName(shopID)
+	return ratelimit.Wait(ctx, resourceName)
 }
 
 // GetSyncStats 获取同步统计
@@ -344,6 +342,7 @@ func (s *FinanceSyncService) GetSyncStats() map[string]interface{} {
 		"enabled_shops": enabledShops,
 		"paused_shops":  pausedShops,
 		"total_synced":  totalSynced,
-		"queue_size":    len(s.taskChan),
+		"pool_running":  s.pool.Running(),
+		"pool_free":     s.pool.Free(),
 	}
 }

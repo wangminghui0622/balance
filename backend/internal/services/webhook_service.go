@@ -306,7 +306,7 @@ func (s *WebhookService) handleOrderCancelRefund(ctx context.Context, shopID uin
 	}
 
 	// 从托管账户退回
-	err = accountService.TransferFromEscrow(ctx, shipmentRecord.FrozenAmount, orderSN, "订单取消退回")
+	err = accountService.TransferFromEscrow(ctx, shipmentRecord.ShopOwnerID, shipmentRecord.FrozenAmount, orderSN, "订单取消退回")
 	if err != nil {
 		s.logError(ctx, shopID, consts.WebhookBuyerCancelOrder, "escrow_refund_error", err)
 	}
@@ -355,9 +355,8 @@ func (s *WebhookService) refreshOrderDetail(shopID uint64, orderSN string) {
 	}
 
 	client := shopee.NewClient(shop.Region)
-	limiter := shopee.GetRateLimiter(shopID)
 
-	if err := limiter.Wait(ctx); err != nil {
+	if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
 		return
 	}
 

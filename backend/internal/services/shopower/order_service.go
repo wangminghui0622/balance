@@ -38,11 +38,19 @@ func NewOrderService() *OrderService {
 }
 
 // SyncOrders 同步订单（支持分时间段、分页、限流、重试）
+// 此方法会先查询店铺信息进行权限校验，适用于 Handler 调用
 func (s *OrderService) SyncOrders(ctx context.Context, adminID int64, shopID int64, timeFrom, timeTo time.Time) (int, error) {
 	shop, err := s.shopService.GetShop(ctx, adminID, shopID)
 	if err != nil {
 		return 0, err
 	}
+	return s.SyncOrdersWithShop(ctx, shop, timeFrom, timeTo)
+}
+
+// SyncOrdersWithShop 同步订单（传入已有的 shop 对象，带分布式锁）
+// 此方法适用于 Handler 手动触发的场景
+func (s *OrderService) SyncOrdersWithShop(ctx context.Context, shop *models.Shop, timeFrom, timeTo time.Time) (int, error) {
+	shopID := shop.ShopID
 
 	// 使用 redsync 创建分布式锁
 	lockKey := fmt.Sprintf(consts.KeySyncLock, shopID)
@@ -58,24 +66,44 @@ func (s *OrderService) SyncOrders(ctx context.Context, adminID int64, shopID int
 	}
 	defer unlockFunc()
 
-	accessToken, err := s.getAccessToken(ctx, uint64(shopID))
+	return s.syncOrdersInternal(ctx, shop, timeFrom, timeTo)
+}
+
+// SyncOrdersWithShopNoLock 同步订单（不加锁，调用方已持有锁）
+// 此方法适用于调度器等已在外层加锁的场景
+func (s *OrderService) SyncOrdersWithShopNoLock(ctx context.Context, shop *models.Shop, timeFrom, timeTo time.Time) (int, error) {
+	return s.syncOrdersInternal(ctx, shop, timeFrom, timeTo)
+}
+
+// syncOrdersInternal 同步订单内部实现（不加锁）
+//
+// 同步流程分三层循环：
+//  1. 外层循环（本函数）：将大时间范围拆分成多个 ≤15天 的小段（Shopee API 限制）
+//  2. 中层循环（syncOrdersInRange）：分页获取该时间段内的所有订单号（每页最多100个）
+//  3. 内层循环（syncOrdersInRange）：分批获取订单详情（每批最多50个）
+func (s *OrderService) syncOrdersInternal(ctx context.Context, shop *models.Shop, timeFrom, timeTo time.Time) (int, error) {
+	shopID := shop.ShopID
+
+	accessToken, err := s.getAccessToken(ctx, shopID)
 	if err != nil {
 		return 0, fmt.Errorf("获取访问令牌失败: %w", err)
 	}
 
-	// 分时间段同步（Shopee API限制15天）
+	// === 外层循环：分时间段同步 ===
+	// Shopee API 限制单次查询最多 15 天，所以需要将大时间范围拆分
+	// 例如：同步 60 天数据 -> 拆分为 4 段（Day1-15, Day16-30, Day31-45, Day46-60）
 	maxRange := int64(consts.ShopeeMaxTimeRange)
 	fromTs := timeFrom.Unix()
 	toTs := timeTo.Unix()
 	totalCount := 0
 
 	for fromTs < toTs {
-		endTs := fromTs + maxRange
+		endTs := fromTs + maxRange // 15天
 		if endTs > toTs {
 			endTs = toTs
 		}
 
-		count, err := s.syncOrdersInRange(ctx, uint64(shopID), shop.Region, accessToken, fromTs, endTs, "")
+		count, err := s.syncOrdersInRange(ctx, shopID, shop.Region, accessToken, fromTs, endTs, "")
 		if err != nil {
 			return totalCount, err
 		}
@@ -83,21 +111,23 @@ func (s *OrderService) SyncOrders(ctx context.Context, adminID int64, shopID int
 		fromTs = endTs
 	}
 
-	s.shopService.UpdateLastSyncTime(uint64(shopID))
+	s.shopService.UpdateLastSyncTime(shopID)
 	return totalCount, nil
 }
 
 // syncOrdersInRange 在指定时间范围内同步订单（支持分页、限流、重试）
 func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, region, accessToken string, timeFrom, timeTo int64, orderStatus string) (int, error) {
 	client := shopee.NewClient(region)
-	limiter := shopee.GetRateLimiter(shopID)
 
 	cursor := ""
 	pageSize := consts.ShopeeOrderListPageSize
 	totalCount := 0
 
+	// === 中层循环：分页获取订单列表 ===
+	// Shopee API 单次最多返回 100 个订单号，通过 cursor 分页获取所有订单
+	// 例如：该时间段有 500 个订单 -> 分 5 页获取
 	for {
-		if err := limiter.Wait(ctx); err != nil {
+		if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
 			return totalCount, fmt.Errorf("限流等待被取消: %w", err)
 		}
 
@@ -115,20 +145,23 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 			break
 		}
 
+		// 提取本页所有订单号
 		orderSNs := make([]string, 0, len(listResp.Response.OrderList))
 		for _, o := range listResp.Response.OrderList {
 			orderSNs = append(orderSNs, o.OrderSN)
 		}
 
-		// 分批获取订单详情
-		for i := 0; i < len(orderSNs); i += consts.ShopeeOrderDetailMaxSize {
+		// === 内层循环：分批获取订单详情 ===
+		// Shopee API 单次最多查询 50 个订单详情，所以需要分批
+		// 例如：本页 100 个订单号 -> 分 2 批获取详情
+		for i := 0; i < len(orderSNs); i += consts.ShopeeOrderDetailMaxSize { // 50个
 			end := i + consts.ShopeeOrderDetailMaxSize
 			if end > len(orderSNs) {
 				end = len(orderSNs)
 			}
 			batch := orderSNs[i:end]
 
-			if err := limiter.Wait(ctx); err != nil {
+			if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
 				return totalCount, fmt.Errorf("限流等待被取消: %w", err)
 			}
 
@@ -254,7 +287,7 @@ func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail 
 			return err
 		}
 
-		// 保存订单商品
+		// 更新订单商品（先删除旧数据，再插入新数据）
 		if err := tx.Table(orderItemTable).Where("order_id = ?", order.ID).Delete(&models.OrderItem{}).Error; err != nil {
 			return err
 		}
@@ -277,7 +310,7 @@ func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail 
 			}
 		}
 
-		// 保存订单地址
+		// 更新订单地址（先删除旧数据，再插入新数据）
 		if err := tx.Table(orderAddressTable).Where("order_id = ?", order.ID).Delete(&models.OrderAddress{}).Error; err != nil {
 			return err
 		}

@@ -12,6 +12,7 @@ import (
 	"balance/backend/internal/config"
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
+	"balance/backend/internal/ratelimit"
 	"balance/backend/internal/services"
 	"balance/backend/internal/services/sync"
 )
@@ -80,6 +81,11 @@ func main() {
 	}
 	defer database.CloseRedis()
 	log.Println("Redis连接成功")
+
+	// 初始化 Sentinel 限流器
+	if err := ratelimit.Init(); err != nil {
+		log.Printf("Sentinel 初始化警告: %v", err)
+	}
 
 	// 启动分布式同步调度器（订单同步，支持多实例部署）
 	distributedSyncScheduler := services.NewDistributedSyncScheduler(database.GetDB(), database.GetRedis())

@@ -6,141 +6,143 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// PrepaymentAccount 预付款账户
+// PrepaymentAccount 预付款账户（店主发货前预付成本）
 type PrepaymentAccount struct {
-	ID              uint64          `gorm:"primaryKey" json:"id"`
-	AdminID         int64           `gorm:"not null;uniqueIndex" json:"admin_id"`          // 店铺老板ID
-	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"balance"`          // 可用余额
-	FrozenAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"frozen_amount"`    // 冻结金额
-	TotalRecharge   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_recharge"`   // 累计充值
-	TotalConsume    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_consume"`    // 累计消费
-	Currency        string          `gorm:"size:10;not null;default:'TWD'" json:"currency"`
-	Status          int8            `gorm:"not null;default:1" json:"status"`              // 1=正常 2=冻结
-	CreatedAt       time.Time       `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt       time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	ID              uint64          `gorm:"primaryKey;comment:主键ID" json:"id"`
+	AdminID         int64           `gorm:"not null;uniqueIndex;comment:店铺老板ID" json:"admin_id"`
+	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:可用余额" json:"balance"`
+	FrozenAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:冻结金额" json:"frozen_amount"`
+	TotalRecharge   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计充值" json:"total_recharge"`
+	TotalConsume    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计消费" json:"total_consume"`
+	Currency        string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
+	Status          int8            `gorm:"not null;default:1;comment:状态(1正常/2冻结)" json:"status"`
+	CreatedAt       time.Time       `gorm:"autoCreateTime;comment:创建时间" json:"created_at"`
+	UpdatedAt       time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }
 
 func (PrepaymentAccount) TableName() string {
 	return "prepayment_accounts"
 }
 
-// DepositAccount 保证金账户
+// DepositAccount 保证金账户（店主缴纳的保证金）
 type DepositAccount struct {
-	ID              uint64          `gorm:"primaryKey" json:"id"`
-	AdminID         int64           `gorm:"not null;uniqueIndex" json:"admin_id"`          // 店铺老板ID
-	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"balance"`          // 保证金余额
-	RequiredAmount  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"required_amount"`  // 应缴保证金
-	Currency        string          `gorm:"size:10;not null;default:'TWD'" json:"currency"`
-	Status          int8            `gorm:"not null;default:1" json:"status"`              // 1=正常 2=不足 3=冻结
-	CreatedAt       time.Time       `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt       time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	ID              uint64          `gorm:"primaryKey;comment:主键ID" json:"id"`
+	AdminID         int64           `gorm:"not null;uniqueIndex;comment:店铺老板ID" json:"admin_id"`
+	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:保证金余额" json:"balance"`
+	RequiredAmount  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:应缴保证金" json:"required_amount"`
+	Currency        string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
+	Status          int8            `gorm:"not null;default:1;comment:状态(1正常/2不足/3冻结)" json:"status"`
+	CreatedAt       time.Time       `gorm:"autoCreateTime;comment:创建时间" json:"created_at"`
+	UpdatedAt       time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }
 
 func (DepositAccount) TableName() string {
 	return "deposit_accounts"
 }
 
-// OperatorAccount 运营老板账户
+// OperatorAccount 运营老板账户（运营收到的成本+分成）
 type OperatorAccount struct {
-	ID              uint64          `gorm:"primaryKey" json:"id"`
-	AdminID         int64           `gorm:"not null;uniqueIndex" json:"admin_id"`          // 运营老板ID
-	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"balance"`          // 可用余额
-	FrozenAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"frozen_amount"`    // 冻结金额
-	TotalEarnings   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_earnings"`   // 累计收益
-	TotalWithdrawn  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_withdrawn"`  // 累计提现
-	Currency        string          `gorm:"size:10;not null;default:'TWD'" json:"currency"`
-	Status          int8            `gorm:"not null;default:1" json:"status"`              // 1=正常 2=冻结
-	CreatedAt       time.Time       `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt       time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	ID              uint64          `gorm:"primaryKey;comment:主键ID" json:"id"`
+	AdminID         int64           `gorm:"not null;uniqueIndex;comment:运营老板ID" json:"admin_id"`
+	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:可用余额" json:"balance"`
+	FrozenAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:冻结金额" json:"frozen_amount"`
+	TotalEarnings   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计收益" json:"total_earnings"`
+	TotalWithdrawn  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计提现" json:"total_withdrawn"`
+	Currency        string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
+	Status          int8            `gorm:"not null;default:1;comment:状态(1正常/2冻结)" json:"status"`
+	CreatedAt       time.Time       `gorm:"autoCreateTime;comment:创建时间" json:"created_at"`
+	UpdatedAt       time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }
 
 func (OperatorAccount) TableName() string {
 	return "operator_accounts"
 }
 
-// AccountTransaction 账户流水
+// AccountTransaction 账户流水（记录所有账户资金变动）
 type AccountTransaction struct {
-	ID              uint64          `gorm:"primaryKey" json:"id"`
-	TransactionNo   string          `gorm:"size:64;not null;uniqueIndex" json:"transaction_no"`  // 流水号
-	AccountType     string          `gorm:"size:20;not null;index" json:"account_type"`          // prepayment/deposit/operator
-	AdminID         int64           `gorm:"not null;index" json:"admin_id"`                      // 账户所属用户ID
-	TransactionType string          `gorm:"size:30;not null;index" json:"transaction_type"`      // 交易类型
-	Amount          decimal.Decimal `gorm:"type:decimal(15,2);not null" json:"amount"`           // 金额 (正=入账 负=出账)
-	BalanceBefore   decimal.Decimal `gorm:"type:decimal(15,2);not null" json:"balance_before"`   // 交易前余额
-	BalanceAfter    decimal.Decimal `gorm:"type:decimal(15,2);not null" json:"balance_after"`    // 交易后余额
-	RelatedOrderSN  string          `gorm:"size:64;not null;default:'';index" json:"related_order_sn"` // 关联订单号
-	RelatedID       uint64          `gorm:"not null;default:0" json:"related_id"`                // 关联ID
-	Remark          string          `gorm:"size:500;not null;default:''" json:"remark"`
-	OperatorID      int64           `gorm:"not null;default:0" json:"operator_id"`               // 操作人ID
-	Status          int8            `gorm:"not null;default:1;index" json:"status"`              // 0=待审批 1=已完成 2=已拒绝
-	CreatedAt       time.Time       `gorm:"autoCreateTime;index" json:"created_at"`
+	ID              uint64          `gorm:"primaryKey;comment:主键ID" json:"id"`
+	TransactionNo   string          `gorm:"size:64;not null;uniqueIndex;comment:流水号" json:"transaction_no"`
+	AccountType     string          `gorm:"size:20;not null;index;comment:账户类型" json:"account_type"`
+	AdminID         int64           `gorm:"not null;index;comment:账户所属用户ID" json:"admin_id"`
+	TransactionType string          `gorm:"size:30;not null;index;comment:交易类型" json:"transaction_type"`
+	Amount          decimal.Decimal `gorm:"type:decimal(15,2);not null;comment:金额(正入账/负出账)" json:"amount"`
+	BalanceBefore   decimal.Decimal `gorm:"type:decimal(15,2);not null;comment:交易前余额" json:"balance_before"`
+	BalanceAfter    decimal.Decimal `gorm:"type:decimal(15,2);not null;comment:交易后余额" json:"balance_after"`
+	RelatedOrderSN  string          `gorm:"size:64;not null;default:'';index;comment:关联订单号" json:"related_order_sn"`
+	RelatedID       uint64          `gorm:"not null;default:0;comment:关联ID" json:"related_id"`
+	Remark          string          `gorm:"size:500;not null;default:'';comment:备注" json:"remark"`
+	OperatorID      int64           `gorm:"not null;default:0;comment:操作人ID" json:"operator_id"`
+	Status          int8            `gorm:"not null;default:1;index;comment:状态(0待审批/1已完成/2已拒绝)" json:"status"`
+	CreatedAt       time.Time       `gorm:"autoCreateTime;index;comment:创建时间" json:"created_at"`
 }
 
 func (AccountTransaction) TableName() string {
 	return "account_transactions"
 }
 
-// ShopOwnerCommissionAccount 店主佣金账户
+// ShopOwnerCommissionAccount 店主佣金账户（店主利润分成）
 type ShopOwnerCommissionAccount struct {
-	ID              uint64          `gorm:"primaryKey" json:"id"`
-	AdminID         int64           `gorm:"not null;uniqueIndex" json:"admin_id"`          // 店铺老板ID
-	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"balance"`          // 可用余额
-	FrozenAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"frozen_amount"`    // 冻结金额
-	TotalEarnings   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_earnings"`   // 累计收益
-	TotalWithdrawn  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_withdrawn"`  // 累计提现
-	Currency        string          `gorm:"size:10;not null;default:'TWD'" json:"currency"`
-	Status          int8            `gorm:"not null;default:1" json:"status"`              // 1=正常 2=冻结
-	CreatedAt       time.Time       `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt       time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	ID              uint64          `gorm:"primaryKey;comment:主键ID" json:"id"`
+	AdminID         int64           `gorm:"not null;uniqueIndex;comment:店铺老板ID" json:"admin_id"`
+	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:可用余额" json:"balance"`
+	FrozenAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:冻结金额" json:"frozen_amount"`
+	TotalEarnings   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计收益" json:"total_earnings"`
+	TotalWithdrawn  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计提现" json:"total_withdrawn"`
+	Currency        string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
+	Status          int8            `gorm:"not null;default:1;comment:状态(1正常/2冻结)" json:"status"`
+	CreatedAt       time.Time       `gorm:"autoCreateTime;comment:创建时间" json:"created_at"`
+	UpdatedAt       time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }
 
 func (ShopOwnerCommissionAccount) TableName() string {
 	return "shop_owner_commission_accounts"
 }
 
-// PlatformCommissionAccount 平台佣金账户
+// PlatformCommissionAccount 平台佣金账户（平台利润分成，单例）
 type PlatformCommissionAccount struct {
-	ID              uint64          `gorm:"primaryKey" json:"id"`
-	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"balance"`          // 可用余额
-	FrozenAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"frozen_amount"`    // 冻结金额
-	TotalEarnings   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_earnings"`   // 累计收益
-	TotalWithdrawn  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_withdrawn"`  // 累计提现
-	Currency        string          `gorm:"size:10;not null;default:'TWD'" json:"currency"`
-	Status          int8            `gorm:"not null;default:1" json:"status"`              // 1=正常 2=冻结
-	CreatedAt       time.Time       `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt       time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	ID              uint64          `gorm:"primaryKey;comment:主键ID" json:"id"`
+	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:可用余额" json:"balance"`
+	FrozenAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:冻结金额" json:"frozen_amount"`
+	TotalEarnings   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计收益" json:"total_earnings"`
+	TotalWithdrawn  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计提现" json:"total_withdrawn"`
+	Currency        string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
+	Status          int8            `gorm:"not null;default:1;comment:状态(1正常/2冻结)" json:"status"`
+	CreatedAt       time.Time       `gorm:"autoCreateTime;comment:创建时间" json:"created_at"`
+	UpdatedAt       time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }
 
 func (PlatformCommissionAccount) TableName() string {
 	return "platform_commission_accounts"
 }
 
-// PenaltyBonusAccount 罚补账户
+// PenaltyBonusAccount 罚补账户（运营罚款和补贴）
 type PenaltyBonusAccount struct {
-	ID              uint64          `gorm:"primaryKey" json:"id"`
-	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"balance"`          // 余额 (正=待支付罚款/负=待发放补贴)
-	TotalPenalty    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_penalty"`    // 累计罚款
-	TotalBonus      decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_bonus"`      // 累计补贴
-	Currency        string          `gorm:"size:10;not null;default:'TWD'" json:"currency"`
-	Status          int8            `gorm:"not null;default:1" json:"status"`              // 1=正常 2=冻结
-	CreatedAt       time.Time       `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt       time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	ID              uint64          `gorm:"primaryKey;autoIncrement;comment:主键ID" json:"id"`
+	AdminID         int64           `gorm:"not null;uniqueIndex;comment:用户ID" json:"admin_id"`
+	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:余额(正待付罚款/负待发补贴)" json:"balance"`
+	TotalPenalty    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计罚款" json:"total_penalty"`
+	TotalBonus      decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计补贴" json:"total_bonus"`
+	Currency        string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
+	Status          int8            `gorm:"not null;default:1;comment:状态(1正常/2冻结)" json:"status"`
+	CreatedAt       time.Time       `gorm:"autoCreateTime;comment:创建时间" json:"created_at"`
+	UpdatedAt       time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }
 
 func (PenaltyBonusAccount) TableName() string {
 	return "penalty_bonus_accounts"
 }
 
-// EscrowAccount 保证金托管账户 (临时托管店主预付款，待结算时分账)
+// EscrowAccount 托管账户（临时托管店主预付款，待结算时分账）
 type EscrowAccount struct {
-	ID              uint64          `gorm:"primaryKey" json:"id"`
-	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"balance"`          // 托管余额
-	TotalIn         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_in"`         // 累计转入
-	TotalOut        decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"total_out"`        // 累计转出
-	Currency        string          `gorm:"size:10;not null;default:'TWD'" json:"currency"`
-	Status          int8            `gorm:"not null;default:1" json:"status"`              // 1=正常 2=冻结
-	CreatedAt       time.Time       `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt       time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	ID              uint64          `gorm:"primaryKey;autoIncrement;comment:主键ID" json:"id"`
+	AdminID         int64           `gorm:"not null;uniqueIndex;comment:用户ID(店主)" json:"admin_id"`
+	Balance         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:托管余额" json:"balance"`
+	TotalIn         decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计转入" json:"total_in"`
+	TotalOut        decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计转出" json:"total_out"`
+	Currency        string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
+	Status          int8            `gorm:"not null;default:1;comment:状态(1正常/2冻结)" json:"status"`
+	CreatedAt       time.Time       `gorm:"autoCreateTime;comment:创建时间" json:"created_at"`
+	UpdatedAt       time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }
 
 func (EscrowAccount) TableName() string {
@@ -149,46 +151,46 @@ func (EscrowAccount) TableName() string {
 
 // WithdrawApplication 提现申请
 type WithdrawApplication struct {
-	ID              uint64          `gorm:"primaryKey" json:"id"`
-	ApplicationNo   string          `gorm:"size:64;not null;uniqueIndex" json:"application_no"`   // 申请单号
-	AdminID         int64           `gorm:"not null;index" json:"admin_id"`                       // 申请人ID
-	AccountType     string          `gorm:"size:30;not null;index" json:"account_type"`           // 账户类型
-	Amount          decimal.Decimal `gorm:"type:decimal(15,2);not null" json:"amount"`            // 提现金额
-	Fee             decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00" json:"fee"`  // 手续费
-	ActualAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null" json:"actual_amount"`     // 实际到账金额
-	Currency        string          `gorm:"size:10;not null;default:'TWD'" json:"currency"`
-	CollectionAccountID uint64      `gorm:"not null" json:"collection_account_id"`                // 收款账户ID
-	Status          int8            `gorm:"not null;default:0;index" json:"status"`               // 0=待审核 1=已通过 2=已拒绝 3=已打款
-	AuditRemark     string          `gorm:"size:500;not null;default:''" json:"audit_remark"`     // 审核备注
-	AuditBy         int64           `gorm:"not null;default:0" json:"audit_by"`                   // 审核人ID
-	AuditAt         *time.Time      `json:"audit_at"`                                             // 审核时间
-	PaidAt          *time.Time      `json:"paid_at"`                                              // 打款时间
-	Remark          string          `gorm:"size:500;not null;default:''" json:"remark"`           // 申请备注
-	CreatedAt       time.Time       `gorm:"autoCreateTime;index" json:"created_at"`
-	UpdatedAt       time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	ID              uint64          `gorm:"primaryKey;comment:主键ID" json:"id"`
+	ApplicationNo   string          `gorm:"size:64;not null;uniqueIndex;comment:申请单号" json:"application_no"`
+	AdminID         int64           `gorm:"not null;index;comment:申请人ID" json:"admin_id"`
+	AccountType     string          `gorm:"size:30;not null;index;comment:账户类型" json:"account_type"`
+	Amount          decimal.Decimal `gorm:"type:decimal(15,2);not null;comment:提现金额" json:"amount"`
+	Fee             decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:手续费" json:"fee"`
+	ActualAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null;comment:实际到账金额" json:"actual_amount"`
+	Currency        string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
+	CollectionAccountID uint64      `gorm:"not null;comment:收款账户ID" json:"collection_account_id"`
+	Status          int8            `gorm:"not null;default:0;index;comment:状态(0待审核/1已通过/2已拒绝/3已打款)" json:"status"`
+	AuditRemark     string          `gorm:"size:500;not null;default:'';comment:审核备注" json:"audit_remark"`
+	AuditBy         int64           `gorm:"not null;default:0;comment:审核人ID" json:"audit_by"`
+	AuditAt         *time.Time      `gorm:"comment:审核时间" json:"audit_at"`
+	PaidAt          *time.Time      `gorm:"comment:打款时间" json:"paid_at"`
+	Remark          string          `gorm:"size:500;not null;default:'';comment:申请备注" json:"remark"`
+	CreatedAt       time.Time       `gorm:"autoCreateTime;index;comment:创建时间" json:"created_at"`
+	UpdatedAt       time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }
 
 func (WithdrawApplication) TableName() string {
 	return "withdraw_applications"
 }
 
-// RechargeApplication 充值申请 (线下充值审核)
+// RechargeApplication 充值申请（线下充值审核）
 type RechargeApplication struct {
-	ID              uint64          `gorm:"primaryKey" json:"id"`
-	ApplicationNo   string          `gorm:"size:64;not null;uniqueIndex" json:"application_no"`   // 申请单号
-	AdminID         int64           `gorm:"not null;index" json:"admin_id"`                       // 申请人ID
-	AccountType     string          `gorm:"size:30;not null;index" json:"account_type"`           // 账户类型: prepayment/deposit
-	Amount          decimal.Decimal `gorm:"type:decimal(15,2);not null" json:"amount"`            // 充值金额
-	Currency        string          `gorm:"size:10;not null;default:'TWD'" json:"currency"`
-	PaymentMethod   string          `gorm:"size:30;not null" json:"payment_method"`               // 支付方式: bank_transfer/cash
-	PaymentProof    string          `gorm:"size:500;not null;default:''" json:"payment_proof"`    // 支付凭证(图片URL)
-	Status          int8            `gorm:"not null;default:0;index" json:"status"`               // 0=待审核 1=已通过 2=已拒绝
-	AuditRemark     string          `gorm:"size:500;not null;default:''" json:"audit_remark"`     // 审核备注
-	AuditBy         int64           `gorm:"not null;default:0" json:"audit_by"`                   // 审核人ID
-	AuditAt         *time.Time      `json:"audit_at"`                                             // 审核时间
-	Remark          string          `gorm:"size:500;not null;default:''" json:"remark"`           // 申请备注
-	CreatedAt       time.Time       `gorm:"autoCreateTime;index" json:"created_at"`
-	UpdatedAt       time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	ID              uint64          `gorm:"primaryKey;comment:主键ID" json:"id"`
+	ApplicationNo   string          `gorm:"size:64;not null;uniqueIndex;comment:申请单号" json:"application_no"`
+	AdminID         int64           `gorm:"not null;index;comment:申请人ID" json:"admin_id"`
+	AccountType     string          `gorm:"size:30;not null;index;comment:账户类型(prepayment/deposit)" json:"account_type"`
+	Amount          decimal.Decimal `gorm:"type:decimal(15,2);not null;comment:充值金额" json:"amount"`
+	Currency        string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
+	PaymentMethod   string          `gorm:"size:30;not null;comment:支付方式(bank_transfer/cash)" json:"payment_method"`
+	PaymentProof    string          `gorm:"size:500;not null;default:'';comment:支付凭证图片URL" json:"payment_proof"`
+	Status          int8            `gorm:"not null;default:0;index;comment:状态(0待审核/1已通过/2已拒绝)" json:"status"`
+	AuditRemark     string          `gorm:"size:500;not null;default:'';comment:审核备注" json:"audit_remark"`
+	AuditBy         int64           `gorm:"not null;default:0;comment:审核人ID" json:"audit_by"`
+	AuditAt         *time.Time      `gorm:"comment:审核时间" json:"audit_at"`
+	Remark          string          `gorm:"size:500;not null;default:'';comment:申请备注" json:"remark"`
+	CreatedAt       time.Time       `gorm:"autoCreateTime;index;comment:创建时间" json:"created_at"`
+	UpdatedAt       time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }
 
 func (RechargeApplication) TableName() string {
@@ -227,6 +229,7 @@ const (
 	TxTypePlatformFee    = "platform_fee"    // 平台服务费
 	TxTypeDepositPay     = "deposit_pay"     // 保证金缴纳
 	TxTypeDepositRefund  = "deposit_refund"  // 保证金退还
+	TxTypeAdjustment     = "adjustment"      // 调账（虾皮退款/扣款）
 )
 
 // 账户状态常量

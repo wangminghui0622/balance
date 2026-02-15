@@ -8,89 +8,42 @@ import (
 
 	"balance/backend/internal/consts"
 	"balance/backend/internal/database"
+	"balance/backend/internal/ratelimit"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// RateLimiter 限流器
-type RateLimiter struct {
-	mu       sync.Mutex
-	tokens   int
-	maxToken int
-	interval time.Duration
-	lastTime time.Time
-}
-
-// NewRateLimiter 创建限流器
-func NewRateLimiter(qps int) *RateLimiter {
-	return &RateLimiter{
-		tokens:   qps,
-		maxToken: qps,
-		interval: time.Second,
-		lastTime: time.Now(),
-	}
-}
-
-// Allow 检查是否允许请求
-func (r *RateLimiter) Allow() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	now := time.Now()
-	elapsed := now.Sub(r.lastTime)
-
-	if elapsed >= r.interval {
-		r.tokens = r.maxToken
-		r.lastTime = now
-	}
-
-	if r.tokens > 0 {
-		r.tokens--
-		return true
-	}
-	return false
-}
-
-// Wait 等待直到允许请求
-func (r *RateLimiter) Wait(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			if r.Allow() {
-				return nil
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-}
-
 var (
-	rateLimiters   = make(map[uint64]*RateLimiter)
-	rateLimitersMu sync.RWMutex
+	initializedShops   = make(map[uint64]bool)
+	initializedShopsMu sync.RWMutex
 )
 
-// GetRateLimiter 获取店铺的限流器
-func GetRateLimiter(shopID uint64) *RateLimiter {
-	rateLimitersMu.RLock()
-	limiter, exists := rateLimiters[shopID]
-	rateLimitersMu.RUnlock()
+// ensureShopRuleLoaded 确保店铺限流规则已加载
+func ensureShopRuleLoaded(shopID uint64) {
+	initializedShopsMu.RLock()
+	if initializedShops[shopID] {
+		initializedShopsMu.RUnlock()
+		return
+	}
+	initializedShopsMu.RUnlock()
 
-	if exists {
-		return limiter
+	initializedShopsMu.Lock()
+	defer initializedShopsMu.Unlock()
+
+	if initializedShops[shopID] {
+		return
 	}
 
-	rateLimitersMu.Lock()
-	defer rateLimitersMu.Unlock()
+	// 加载 Shopee API 限流规则
+	ratelimit.LoadShopeeAPIRules(shopID, float64(consts.ShopeeAPIRateLimit))
+	initializedShops[shopID] = true
+}
 
-	if limiter, exists = rateLimiters[shopID]; exists {
-		return limiter
-	}
-
-	limiter = NewRateLimiter(consts.ShopeeAPIRateLimit)
-	rateLimiters[shopID] = limiter
-	return limiter
+// WaitForRateLimit 等待限流通过（使用 Sentinel）
+func WaitForRateLimit(ctx context.Context, shopID uint64) error {
+	ensureShopRuleLoaded(shopID)
+	resourceName := ratelimit.ShopeeAPIResourceName(shopID)
+	return ratelimit.Wait(ctx, resourceName)
 }
 
 // RetryWithBackoff 带退避的重试

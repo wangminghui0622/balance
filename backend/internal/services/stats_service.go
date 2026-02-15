@@ -203,7 +203,7 @@ func (s *StatsService) generatePlatformDailyStats(ctx context.Context, statDate 
 
 		s.db.Table(settlementTable).
 			Where("created_at >= ? AND created_at < ? AND status = ?", startTime, endTime, models.OrderSettlementCompleted).
-			Select("COALESCE(SUM(total_amount), 0)").Scan(&settledAmount)
+			Select("COALESCE(SUM(escrow_amount), 0)").Scan(&settledAmount)
 		stats.SettledAmount = stats.SettledAmount.Add(settledAmount)
 
 		s.db.Table(settlementTable).

@@ -65,9 +65,8 @@ func (s *EscrowService) SyncOrderEscrowInternal(ctx context.Context, shopID uint
 // fetchAndSaveEscrow 获取并保存结算明细
 func (s *EscrowService) fetchAndSaveEscrow(ctx context.Context, shopID uint64, region, currency, accessToken, orderSN string) (*models.OrderEscrow, error) {
 	client := shopee.NewClient(region)
-	limiter := shopee.GetRateLimiter(shopID)
 
-	if err := limiter.Wait(ctx); err != nil {
+	if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
 		return nil, fmt.Errorf("限流等待被取消: %w", err)
 	}
 

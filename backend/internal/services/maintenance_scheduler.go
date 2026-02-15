@@ -11,20 +11,22 @@ import (
 
 // MaintenanceScheduler 维护任务调度器
 type MaintenanceScheduler struct {
-	cron           *cron.Cron
-	archiveService *ArchiveService
-	statsService   *StatsService
-	wg             sync.WaitGroup // 用于等待后台任务结束
-	stopChan       chan struct{}  // 用于通知后台任务停止
+	cron              *cron.Cron
+	archiveService    *ArchiveService
+	statsService      *StatsService
+	settlementService *SettlementService
+	wg                sync.WaitGroup // 用于等待后台任务结束
+	stopChan          chan struct{}  // 用于通知后台任务停止
 }
 
 // NewMaintenanceScheduler 创建维护任务调度器
 func NewMaintenanceScheduler() *MaintenanceScheduler {
 	return &MaintenanceScheduler{
-		cron:           cron.New(cron.WithSeconds()),
-		archiveService: NewArchiveService(),
-		statsService:   NewStatsService(),
-		stopChan:       make(chan struct{}),
+		cron:              cron.New(cron.WithSeconds()),
+		archiveService:    NewArchiveService(),
+		statsService:      NewStatsService(),
+		settlementService: NewSettlementService(),
+		stopChan:          make(chan struct{}),
 	}
 }
 
@@ -72,6 +74,36 @@ func (s *MaintenanceScheduler) Start() {
 	})
 	if err != nil {
 		log.Printf("[Maintenance] 添加清理归档任务失败: %v", err)
+	}
+
+	// 每10分钟处理一次虾皮结算（打款）
+	_, err = s.cron.AddFunc("0 */10 * * * *", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		count, err := s.settlementService.ProcessShopeeSettlement(ctx)
+		if err != nil {
+			log.Printf("[Maintenance] 处理虾皮结算失败: %v", err)
+		} else if count > 0 {
+			log.Printf("[Maintenance] 处理虾皮结算完成，结算 %d 笔订单", count)
+		}
+	})
+	if err != nil {
+		log.Printf("[Maintenance] 添加虾皮结算任务失败: %v", err)
+	}
+
+	// 每10分钟处理一次虾皮调账（退款、扣款等）
+	_, err = s.cron.AddFunc("0 */10 * * * *", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		count, err := s.settlementService.ProcessShopeeAdjustments(ctx)
+		if err != nil {
+			log.Printf("[Maintenance] 处理虾皮调账失败: %v", err)
+		} else if count > 0 {
+			log.Printf("[Maintenance] 处理虾皮调账完成，处理 %d 笔调账", count)
+		}
+	})
+	if err != nil {
+		log.Printf("[Maintenance] 添加虾皮调账任务失败: %v", err)
 	}
 
 	s.cron.Start()

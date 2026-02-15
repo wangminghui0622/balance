@@ -145,7 +145,7 @@ func (s *SettlementService) executeSettlement(ctx context.Context, settlement *m
 		}
 
 		// 2. 从托管账户转出 (发货时已转入托管)
-		err = s.accountService.TransferFromEscrow(ctx, shipmentRecord.FrozenAmount, settlement.OrderSN, "订单结算转出")
+		err = s.accountService.TransferFromEscrow(ctx, settlement.ShopOwnerID, shipmentRecord.FrozenAmount, settlement.OrderSN, "订单结算转出")
 		if err != nil {
 			return fmt.Errorf("托管账户转出失败: %w", err)
 		}
@@ -256,6 +256,192 @@ func (s *SettlementService) ProcessShopeeSettlement(ctx context.Context) (int, e
 	}
 
 	return settledCount, nil
+}
+
+// ProcessShopeeAdjustments 处理 Shopee 调账 (定时任务调用) - 遍历所有分表
+// 当虾皮发生退款、扣款等调账时，需要反向分账
+func (s *SettlementService) ProcessShopeeAdjustments(ctx context.Context) (int, error) {
+	adjustedCount := 0
+
+	// 遍历所有分表
+	for i := 0; i < database.ShardCount; i++ {
+		financeTable := fmt.Sprintf("finance_incomes_%d", i)
+
+		// 查找未处理的调账记录（退款、调账等）
+		var incomes []models.FinanceIncome
+		err := s.db.Table(financeTable).
+			Where("settlement_handle_status = ?", models.SettlementStatusPending).
+			Where("order_sn != ''").
+			Where("transaction_type IN ?", []string{
+				models.TransactionTypeRefund,
+				models.TransactionTypeEscrowAdjustment,
+				models.TransactionTypeSellerAdjustment,
+				models.TransactionTypeCommissionAdjust,
+				models.TransactionTypeServiceFeeAdjust,
+				models.TransactionTypeShippingFeeAdjust,
+			}).
+			Find(&incomes).Error
+		if err != nil {
+			continue
+		}
+
+		for _, income := range incomes {
+			// 处理调账
+			err := s.handleAdjustment(ctx, &income)
+			if err != nil {
+				fmt.Printf("[Settlement] 处理调账失败 order_sn=%s: %v\n", income.OrderSN, err)
+				continue
+			}
+
+			// 标记已处理
+			s.db.Table(financeTable).Where("id = ?", income.ID).Update("settlement_handle_status", models.SettlementStatusCompleted)
+			adjustedCount++
+		}
+	}
+
+	return adjustedCount, nil
+}
+
+// handleAdjustment 处理单个调账记录
+func (s *SettlementService) handleAdjustment(ctx context.Context, income *models.FinanceIncome) error {
+	// 查找原始结算记录
+	settlementTable := database.GetOrderSettlementTableName(income.ShopID)
+	var originalSettlement models.OrderSettlement
+	err := s.db.Table(settlementTable).Where("order_sn = ? AND status = ?", income.OrderSN, models.OrderSettlementCompleted).First(&originalSettlement).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			// 订单尚未结算，无需处理调账
+			return nil
+		}
+		return err
+	}
+
+	// 调账金额（通常为负数，表示扣款）
+	adjustAmount := income.Amount
+
+	// 如果调账金额为0，跳过
+	if adjustAmount.IsZero() {
+		return nil
+	}
+
+	// 计算各方需要调整的金额（按原始分成比例）
+	hundred := decimal.NewFromInt(100)
+	platformAdjust := adjustAmount.Mul(originalSettlement.PlatformShareRate).Div(hundred).Round(2)
+	operatorAdjust := adjustAmount.Mul(originalSettlement.OperatorShareRate).Div(hundred).Round(2)
+	shopOwnerAdjust := adjustAmount.Sub(platformAdjust).Sub(operatorAdjust)
+
+	// 创建调账结算记录
+	adjustmentSettlement := &models.OrderSettlement{
+		SettlementNo:       s.GenerateSettlementNo(),
+		ShopID:             income.ShopID,
+		OrderSN:            income.OrderSN,
+		OrderID:            originalSettlement.OrderID,
+		ShopOwnerID:        originalSettlement.ShopOwnerID,
+		OperatorID:         originalSettlement.OperatorID,
+		Currency:           originalSettlement.Currency,
+		EscrowAmount:       adjustAmount,
+		GoodsCost:          decimal.Zero,
+		ShippingCost:       decimal.Zero,
+		TotalCost:          decimal.Zero,
+		Profit:             adjustAmount, // 调账全部计入利润调整
+		PlatformShareRate:  originalSettlement.PlatformShareRate,
+		OperatorShareRate:  originalSettlement.OperatorShareRate,
+		ShopOwnerShareRate: originalSettlement.ShopOwnerShareRate,
+		PlatformShare:      platformAdjust,
+		OperatorShare:      operatorAdjust,
+		ShopOwnerShare:     shopOwnerAdjust,
+		OperatorIncome:     operatorAdjust, // 调账时运营只调整分成部分
+		Status:             models.OrderSettlementPending,
+		Remark:             fmt.Sprintf("虾皮调账: %s", income.TransactionType),
+	}
+
+	if err := s.db.Table(settlementTable).Create(adjustmentSettlement).Error; err != nil {
+		return fmt.Errorf("创建调账结算记录失败: %w", err)
+	}
+
+	// 执行调账资金划转
+	err = s.executeAdjustment(ctx, adjustmentSettlement)
+	if err != nil {
+		adjustmentSettlement.Remark = fmt.Sprintf("调账失败: %s", err.Error())
+		s.db.Table(settlementTable).Where("id = ?", adjustmentSettlement.ID).Update("remark", adjustmentSettlement.Remark)
+		return fmt.Errorf("执行调账失败: %w", err)
+	}
+
+	// 更新状态
+	now := time.Now()
+	s.db.Table(settlementTable).Where("id = ?", adjustmentSettlement.ID).Updates(map[string]interface{}{
+		"status":     models.OrderSettlementCompleted,
+		"settled_at": &now,
+	})
+
+	return nil
+}
+
+// executeAdjustment 执行调账资金划转
+func (s *SettlementService) executeAdjustment(ctx context.Context, settlement *models.OrderSettlement) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// 调账金额通常为负数（扣款），需要从各方账户扣除
+		// 如果为正数（补款），则增加到各方账户
+
+		// 1. 调整运营账户
+		if !settlement.OperatorShare.IsZero() {
+			if settlement.OperatorShare.GreaterThan(decimal.Zero) {
+				// 补款：增加运营收入
+				_, err := s.accountService.AddOperatorIncome(ctx, settlement.OperatorID, settlement.OperatorShare, settlement.OrderSN,
+					fmt.Sprintf("虾皮调账补款-运营分成%s", settlement.OperatorShare.String()))
+				if err != nil {
+					return fmt.Errorf("增加运营调账收入失败: %w", err)
+				}
+			} else {
+				// 扣款：从运营账户扣除
+				_, err := s.accountService.DeductOperatorBalance(ctx, settlement.OperatorID, settlement.OperatorShare.Abs(), settlement.OrderSN,
+					fmt.Sprintf("虾皮调账扣款-运营分成%s", settlement.OperatorShare.Abs().String()))
+				if err != nil {
+					return fmt.Errorf("扣除运营调账金额失败: %w", err)
+				}
+			}
+		}
+
+		// 2. 调整店主佣金账户
+		if !settlement.ShopOwnerShare.IsZero() {
+			if settlement.ShopOwnerShare.GreaterThan(decimal.Zero) {
+				// 补款：增加店主佣金
+				_, err := s.accountService.AddShopOwnerCommission(ctx, settlement.ShopOwnerID, settlement.ShopOwnerShare, settlement.OrderSN,
+					fmt.Sprintf("虾皮调账补款-店主分成%s", settlement.ShopOwnerShare.String()))
+				if err != nil {
+					return fmt.Errorf("增加店主调账佣金失败: %w", err)
+				}
+			} else {
+				// 扣款：从店主佣金账户扣除
+				_, err := s.accountService.DeductShopOwnerCommission(ctx, settlement.ShopOwnerID, settlement.ShopOwnerShare.Abs(), settlement.OrderSN,
+					fmt.Sprintf("虾皮调账扣款-店主分成%s", settlement.ShopOwnerShare.Abs().String()))
+				if err != nil {
+					return fmt.Errorf("扣除店主调账佣金失败: %w", err)
+				}
+			}
+		}
+
+		// 3. 调整平台佣金账户
+		if !settlement.PlatformShare.IsZero() {
+			if settlement.PlatformShare.GreaterThan(decimal.Zero) {
+				// 补款：增加平台佣金
+				_, err := s.accountService.AddPlatformCommission(ctx, settlement.PlatformShare, settlement.OrderSN,
+					fmt.Sprintf("虾皮调账补款-平台分成%s", settlement.PlatformShare.String()))
+				if err != nil {
+					return fmt.Errorf("增加平台调账佣金失败: %w", err)
+				}
+			} else {
+				// 扣款：从平台佣金账户扣除
+				_, err := s.accountService.DeductPlatformCommission(ctx, settlement.PlatformShare.Abs(), settlement.OrderSN,
+					fmt.Sprintf("虾皮调账扣款-平台分成%s", settlement.PlatformShare.Abs().String()))
+				if err != nil {
+					return fmt.Errorf("扣除平台调账佣金失败: %w", err)
+				}
+			}
+		}
+
+		return nil
+	})
 }
 
 // GetPendingSettlements 获取待结算订单 - 遍历所有分表

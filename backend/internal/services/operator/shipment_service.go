@@ -151,7 +151,7 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, operatorID int64, req *
 	}
 
 	// 11. 转入托管账户 (冻结金额转入托管，待结算时分账)
-	err = s.accountService.TransferToEscrow(ctx, totalCost, req.OrderSN, fmt.Sprintf("发货托管-订单%s", req.OrderSN))
+	err = s.accountService.TransferToEscrow(ctx, relation.ShopOwnerID, totalCost, req.OrderSN, fmt.Sprintf("发货托管-订单%s", req.OrderSN))
 	if err != nil {
 		// 托管失败不影响发货流程，记录日志即可
 		record.Remark = fmt.Sprintf("托管转入失败: %s", err.Error())
