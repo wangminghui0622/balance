@@ -39,12 +39,7 @@ func SetupRouter(mode string, cfg *config.Config) *gin.Engine {
 	// Prometheus指标端点
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
-	// 健康检查
-	r.GET(consts.RouteHealth, func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
-	})
-
-	// Webhook接收（放在API前缀外，方便虾皮配置）
+	// Webhook接收
 	webhookHandler := handlers.NewWebhookHandler()
 	r.POST(consts.RouteWebhook, webhookHandler.HandleWebhook)
 

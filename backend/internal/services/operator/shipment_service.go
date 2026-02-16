@@ -10,6 +10,7 @@ import (
 	"balance/backend/internal/services"
 	"balance/backend/internal/services/shopower"
 	"balance/backend/internal/shopee"
+	"balance/backend/internal/utils"
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -22,6 +23,7 @@ type ShipmentService struct {
 	shopService     *shopower.ShopService
 	shipmentService *shopower.ShipmentService
 	shardedDB       *database.ShardedDB
+	idGenerator     *utils.IDGenerator
 }
 
 // NewShipmentService 创建运营发货服务
@@ -33,6 +35,7 @@ func NewShipmentService() *ShipmentService {
 		shopService:     shopower.NewShopService(),
 		shipmentService: shopower.NewShipmentService(),
 		shardedDB:       database.NewShardedDB(db),
+		idGenerator:     utils.NewIDGenerator(database.GetRedis()),
 	}
 }
 
@@ -103,7 +106,9 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, operatorID int64, req *
 	}
 
 	// 8. 创建发货记录
+	recordID, _ := s.idGenerator.GenerateShipmentRecordID(ctx)
 	record := &models.OrderShipmentRecord{
+		ID:                  uint64(recordID),
 		ShopID:              req.ShopID,
 		OrderSN:             req.OrderSN,
 		OrderID:             order.ID,

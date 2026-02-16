@@ -37,46 +37,6 @@ func main() {
 	}
 	log.Println("MySQL连接成功")
 
-	//// 自动迁移数据库表结构
-	//// 注意：分表的表（orders_X, shipments_X 等）需要通过 database.sql 脚本创建
-	//// 这里只迁移不分表的基础表
-	//if err := database.GetDB().AutoMigrate(
-	//	// 用户与店铺（不分表）
-	//	&models.Admin{},
-	//	&models.Shop{},
-	//	&models.ShopAuthorization{},
-	//	&models.ShopOperatorRelation{},
-	//	&models.ShopSyncRecord{},
-	//	// 配置表（不分表）
-	//	&models.ProfitShareConfig{},
-	//	&models.LogisticsChannel{},
-	//	// 账户表（不分表）
-	//	&models.PrepaymentAccount{},
-	//	&models.DepositAccount{},
-	//	&models.OperatorAccount{},
-	//	&models.ShopOwnerCommissionAccount{},
-	//	&models.PlatformCommissionAccount{},
-	//	&models.PenaltyBonusAccount{},
-	//	&models.EscrowAccount{},
-	//	&models.CollectionAccount{},
-	//	// 申请表（不分表）
-	//	&models.WithdrawApplication{},
-	//	&models.RechargeApplication{},
-	//	// 统计表（不分表）
-	//	&models.OrderDailyStat{},
-	//	&models.FinanceDailyStat{},
-	//	&models.PlatformDailyStat{},
-	//	// 以下表已分表，需通过 database.sql 创建：
-	//	// orders_0~9, order_items_0~9, order_addresses_0~9
-	//	// order_escrows_0~9, order_escrow_items_0~9, order_settlements_0~9
-	//	// order_shipment_records_0~9, shipments_0~9, finance_incomes_0~9
-	//	// operation_logs_0~9, account_transactions_0~9
-	//); err != nil {
-	//	log.Printf("数据库迁移警告: %v", err)
-	//} else {
-	//	log.Println("数据库迁移完成")
-	//}
-
 	// 初始化Redis
 	if err := database.InitRedis(&cfg.Redis); err != nil {
 		log.Fatalf("初始化Redis失败: %v", err)
@@ -90,20 +50,21 @@ func main() {
 	}
 
 	// 初始化各定时器的文件日志（不同定时器写入不同日志文件，方便调试）
+	// 基于 zap + lumberjack：异步缓冲写入、日志轮转、30天自动清理、gzip压缩
 	logDir := "logs/schedulers"
-	distributedSyncLogger, closeDistSyncLog, err := utils.NewFileLogger(logDir, "distributed_sync.log", "")
+	distributedSyncLogger, closeDistSyncLog, err := utils.NewFileLogger(logDir, "distributed_sync.log")
 	if err != nil {
 		log.Printf("创建分布式同步日志失败: %v，将使用标准输出", err)
 	}
-	financeSyncLogger, closeFinanceSyncLog, err := utils.NewFileLogger(logDir, "finance_sync.log", "")
+	financeSyncLogger, closeFinanceSyncLog, err := utils.NewFileLogger(logDir, "finance_sync.log")
 	if err != nil {
 		log.Printf("创建财务同步日志失败: %v，将使用标准输出", err)
 	}
-	maintenanceLogger, closeMaintenanceLog, err := utils.NewFileLogger(logDir, "maintenance.log", "")
+	maintenanceLogger, closeMaintenanceLog, err := utils.NewFileLogger(logDir, "maintenance.log")
 	if err != nil {
 		log.Printf("创建维护任务日志失败: %v，将使用标准输出", err)
 	}
-	metricsLogger, closeMetricsLog, err := utils.NewFileLogger(logDir, "metrics.log", "")
+	metricsLogger, closeMetricsLog, err := utils.NewFileLogger(logDir, "metrics.log")
 	if err != nil {
 		log.Printf("创建指标收集日志失败: %v，将使用标准输出", err)
 	}

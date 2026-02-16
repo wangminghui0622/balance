@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"balance/backend/internal/database"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/go-redsync/redsync/v4"
 	"github.com/robfig/cron/v3"
+	"go.uber.org/zap"
 )
 
 const (
@@ -23,17 +23,17 @@ type Scheduler struct {
 	cron               *cron.Cron
 	financeSyncService *FinanceSyncService
 	rs                 *redsync.Redsync
-	logger             *log.Logger // 文件日志
+	logger             *zap.SugaredLogger // 文件日志
 }
 
 // NewScheduler 创建调度器
-// logger: 可选的文件日志，传nil则使用标准log
-func NewScheduler(workerCount int, logger ...*log.Logger) *Scheduler {
-	var l *log.Logger
+// logger: 可选的 zap SugaredLogger，传nil则使用默认标准输出
+func NewScheduler(workerCount int, logger ...*zap.SugaredLogger) *Scheduler {
+	var l *zap.SugaredLogger
 	if len(logger) > 0 && logger[0] != nil {
 		l = logger[0]
 	} else {
-		l = log.Default()
+		l = utils.DefaultSugaredLogger()
 	}
 	return &Scheduler{
 		cron:               cron.New(cron.WithSeconds()),
@@ -45,7 +45,7 @@ func NewScheduler(workerCount int, logger ...*log.Logger) *Scheduler {
 
 // Start 启动调度器
 func (s *Scheduler) Start() {
-	s.logger.Println("启动同步调度器...")
+	s.logger.Info("启动同步调度器...")
 
 	// 启动财务同步服务
 	s.financeSyncService.Start()
@@ -56,22 +56,22 @@ func (s *Scheduler) Start() {
 		s.tryScheduleWithLock()
 	})
 	if err != nil {
-		s.logger.Printf("添加财务同步定时任务失败: %v", err)
+		s.logger.Infof("添加财务同步定时任务失败: %v", err)
 	}
 
 	// 每小时打印一次同步统计
 	_, err = s.cron.AddFunc("0 0 * * * *", func() {
 		stats := s.financeSyncService.GetSyncStats()
-		s.logger.Printf("同步统计: 总店铺=%v, 启用=%v, 暂停=%v, 已同步=%v, 队列=%v",
+		s.logger.Infof("同步统计: 总店铺=%v, 启用=%v, 暂停=%v, 已同步=%v, 队列=%v",
 			stats["total_shops"], stats["enabled_shops"], stats["paused_shops"],
 			stats["total_synced"], stats["queue_size"])
 	})
 	if err != nil {
-		s.logger.Printf("添加统计定时任务失败: %v", err)
+		s.logger.Infof("添加统计定时任务失败: %v", err)
 	}
 
 	s.cron.Start()
-	s.logger.Println("同步调度器已启动")
+	s.logger.Info("同步调度器已启动")
 
 	// 启动后延迟5秒执行一次初始同步（带分布式锁）
 	go func() {
@@ -94,21 +94,21 @@ func (s *Scheduler) tryScheduleWithLock() {
 	// 尝试获取锁并自动续期
 	unlockFunc, acquired := utils.TryLockWithAutoExtend(ctx, mutex, financeSyncExtendInterval)
 	if !acquired {
-		s.logger.Println("[FinanceSync] 其他节点正在调度，跳过")
+		s.logger.Info("[FinanceSync] 其他节点正在调度，跳过")
 		return
 	}
 	defer unlockFunc()
 
-	s.logger.Println("[FinanceSync] 获取分布式锁成功，开始调度财务同步任务...")
+	s.logger.Info("[FinanceSync] 获取分布式锁成功，开始调度财务同步任务...")
 	s.financeSyncService.ScheduleAllShops()
 }
 
 // Stop 停止调度器
 func (s *Scheduler) Stop() {
-	s.logger.Println("停止同步调度器...")
+	s.logger.Info("停止同步调度器...")
 	s.cron.Stop()
 	s.financeSyncService.Stop()
-	s.logger.Println("同步调度器已停止")
+	s.logger.Info("同步调度器已停止")
 }
 
 // GetFinanceSyncService 获取财务同步服务

@@ -10,6 +10,7 @@ import (
 	"balance/backend/internal/consts"
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
+	"balance/backend/internal/utils"
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -17,16 +18,18 @@ import (
 
 // MockDataGenerator 模拟数据生成器（仅用于沙箱环境测试）
 type MockDataGenerator struct {
-	db        *gorm.DB
-	shardedDB *database.ShardedDB
+	db          *gorm.DB
+	shardedDB   *database.ShardedDB
+	idGenerator *utils.IDGenerator
 }
 
 // NewMockDataGenerator 创建模拟数据生成器
 func NewMockDataGenerator() *MockDataGenerator {
 	db := database.GetDB()
 	return &MockDataGenerator{
-		db:        db,
-		shardedDB: database.NewShardedDB(db),
+		db:          db,
+		shardedDB:   database.NewShardedDB(db),
+		idGenerator: utils.NewIDGenerator(database.GetRedis()),
 	}
 }
 
@@ -111,6 +114,8 @@ func (g *MockDataGenerator) GenerateMockOrders(ctx context.Context, req *MockOrd
 			CreateTime:    &createTime,
 		}
 
+		orderID, _ := g.idGenerator.GenerateOrderID(ctx)
+		order.ID = uint64(orderID)
 		if err := g.db.Table(orderTable).Create(&order).Error; err != nil {
 			log.Printf("[MockData] 创建订单失败: %v", err)
 			continue
@@ -120,7 +125,9 @@ func (g *MockDataGenerator) GenerateMockOrders(ctx context.Context, req *MockOrd
 		itemCount := 1 + rand.Intn(3)
 		itemAmount := orderAmount.Div(decimal.NewFromInt(int64(itemCount)))
 		for j := 0; j < itemCount; j++ {
+			itemID, _ := g.idGenerator.GenerateOrderItemID(ctx)
 			item := models.OrderItem{
+				ID:        uint64(itemID),
 				OrderID:   order.ID,
 				ShopID:    req.ShopID,
 				OrderSN:   orderSN,
@@ -211,6 +218,8 @@ func (g *MockDataGenerator) generateMockSettlement(ctx context.Context, shopID u
 		SettledAt:          &now,
 	}
 
+	settlementID, _ := g.idGenerator.GenerateOrderSettlementID(ctx)
+	settlement.ID = uint64(settlementID)
 	return g.db.Table(settlementTable).Create(&settlement).Error
 }
 
@@ -235,6 +244,8 @@ func (g *MockDataGenerator) generateMockEscrow(ctx context.Context, shopID uint6
 		SyncStatus:           1,
 	}
 
+	escrowID, _ := g.idGenerator.GenerateOrderEscrowID(ctx)
+	escrow.ID = uint64(escrowID)
 	return g.db.Table(escrowTable).Create(&escrow).Error
 }
 
@@ -253,6 +264,8 @@ func (g *MockDataGenerator) generateMockIncome(ctx context.Context, shopID uint6
 		TransactionTime: time.Now().Unix(),
 	}
 
+	incomeID, _ := g.idGenerator.GenerateFinanceIncomeID(ctx)
+	income.ID = uint64(incomeID)
 	return g.db.Table(incomeTable).Create(&income).Error
 }
 

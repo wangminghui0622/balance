@@ -37,6 +37,7 @@ type ShipmentService struct {
 	shardedDB   *database.ShardedDB
 	shopService *ShopService
 	rs          *redsync.Redsync
+	idGenerator *utils.IDGenerator
 }
 
 // NewShipmentService 创建发货服务
@@ -47,6 +48,7 @@ func NewShipmentService() *ShipmentService {
 		shardedDB:   database.NewShardedDB(db),
 		shopService: NewShopService(),
 		rs:          database.GetRedsync(),
+		idGenerator: utils.NewIDGenerator(database.GetRedis()),
 	}
 }
 
@@ -103,6 +105,8 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *Shi
 		shipment.ID = existingShipment.ID
 		s.db.Table(shipmentTable).Where("id = ?", shipment.ID).Updates(&shipment)
 	} else {
+		shipmentID, _ := s.idGenerator.GenerateShipmentID(ctx)
+		shipment.ID = uint64(shipmentID)
 		if err := s.db.Table(shipmentTable).Create(&shipment).Error; err != nil {
 			return fmt.Errorf("创建发货记录失败: %w", err)
 		}
@@ -145,8 +149,10 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, adminID int64, req *Shi
 }
 
 func (s *ShipmentService) logOperation(shopID uint64, orderSN, opType, opDesc string, status int8) {
+	logID, _ := s.idGenerator.GenerateOperationLogID(context.Background())
 	logTable := database.GetOperationLogTableName(shopID)
 	log := models.OperationLog{
+		ID:            uint64(logID),
 		ShopID:        shopID,
 		OrderSN:       orderSN,
 		OperationType: opType,

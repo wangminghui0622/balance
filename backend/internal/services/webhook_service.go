@@ -26,6 +26,7 @@ type WebhookService struct {
 	orderService *shopower.OrderService
 	shopService  *shopower.ShopService
 	rs           *redsync.Redsync
+	idGenerator  *utils.IDGenerator
 }
 
 // NewWebhookService 创建Webhook服务
@@ -37,6 +38,7 @@ func NewWebhookService() *WebhookService {
 		orderService: shopower.NewOrderService(),
 		shopService:  shopower.NewShopService(),
 		rs:           database.GetRedsync(),
+		idGenerator:  utils.NewIDGenerator(database.GetRedis()),
 	}
 }
 
@@ -119,17 +121,14 @@ func (s *WebhookService) CheckAndSetUpdateTime(ctx context.Context, shopID uint6
 }
 
 // CanStatusTransition 检查状态转换是否合法 - 使用分表
-func (s *WebhookService) CanStatusTransition(ctx context.Context, shopID uint64, orderSN string, newStatus string) bool {
-	orderTable := database.GetOrderTableName(shopID)
+func (s *WebhookService) CanStatusTransition(ctx context.Context, orderTable string, shopID uint64, orderSN string, newStatus string) bool {
 	var order models.Order
 	if err := s.db.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&order).Error; err != nil {
 		return true
 	}
-
 	if order.StatusLocked {
 		return false
 	}
-
 	currentPriority, currentExists := consts.OrderStatusPriority[order.OrderStatus]
 	newPriority, newExists := consts.OrderStatusPriority[newStatus]
 
@@ -157,43 +156,47 @@ func (s *WebhookService) HandleOrderStatusUpdate(ctx context.Context, shopID uin
 		s.logError(ctx, shopID, consts.WebhookOrderStatus, "unmarshal_error", err)
 		return
 	}
-
+	//1.重复推送同一条消息（网络重试等原因），如果这个 key 已经存在，说明这条 Webhook 之前已经处理过了，直接丢弃
 	if s.CheckWebhookDuplicate(ctx, shopID, orderData.OrderSN, consts.WebhookOrderStatus, timestamp) {
 		return
 	}
-
+	//2.防止同一时刻有多个 Webhook 同时修改同一个订单,（比如状态更新和取消同时到达）。获取锁失败说明有其他协程正在处理这个订单，直接放弃
 	unlockFunc := s.AcquireOrderLock(ctx, shopID, orderData.OrderSN)
 	if unlockFunc == nil {
 		return
 	}
 	defer unlockFunc()
-
+	//3.防止乱序消息。Shopee 的 Webhook 可能不按时间顺序到达（比如旧的更新晚于新的更新到达）。
+	//用 Redis Lua 脚本原子性地检查：如果这条消息的 update_time ≤ 已经处理过的最新时间，说明是过期消息，丢弃。否则更新为新的最新时间
 	if orderData.UpdateTime > 0 && !s.CheckAndSetUpdateTime(ctx, shopID, orderData.OrderSN, orderData.UpdateTime) {
 		return
 	}
-
-	if !s.CanStatusTransition(ctx, shopID, orderData.OrderSN, orderData.Status) {
+	orderTable := database.GetOrderTableName(shopID)
+	//4.防止状态回退。订单状态有优先级（比如 COMPLETED > SHIPPED > READY_TO_SHIP），如果新状态的优先级低于当前状态（比如已经是 COMPLETED 了又来了一个 SHIPPED），
+	//就阻止这次更新。同时如果订单被店主手动锁定了状态（StatusLocked），也会被拦截。被拦截的事件会记录日志，方便排查。
+	if !s.CanStatusTransition(ctx, orderTable, shopID, orderData.OrderSN, orderData.Status) {
 		s.LogWebhook(ctx, shopID, consts.WebhookOrderStatus, "status_rollback_blocked", data)
 		return
+	}
+	if orderData.Status == consts.OrderStatusReadyToShip {
+		// 待发货：拉取完整订单详情并全量更新（包含状态、买家、物流、金额等所有字段）
+		go s.refreshOrderDetail(shopID, orderTable, orderData.OrderSN)
+	} else {
+		// 其他状态：只需更新状态字段（兜底检查 status_locked，防止覆盖锁定状态）
+		if err := s.db.Table(orderTable).
+			Where("shop_id = ? AND order_sn = ? AND status_locked = false", shopID, orderData.OrderSN).
+			Update("order_status", orderData.Status).Error; err != nil {
+			s.logError(ctx, shopID, consts.WebhookOrderStatus, "update_error", err)
+			return
+		}
 	}
 
 	s.LogWebhook(ctx, shopID, consts.WebhookOrderStatus, "order_status", data)
 
-	orderTable := database.GetOrderTableName(shopID)
-	if err := s.db.Table(orderTable).
-		Where("shop_id = ? AND order_sn = ?", shopID, orderData.OrderSN).
-		Update("order_status", orderData.Status).Error; err != nil {
-		s.logError(ctx, shopID, consts.WebhookOrderStatus, "update_error", err)
-		return
-	}
-
+	// 清除状态缓存，下次查询从数据库读取最新值
 	rdb := database.GetRedis()
 	cacheKey := fmt.Sprintf(consts.KeyOrderStatus, shopID, orderData.OrderSN)
 	rdb.Del(ctx, cacheKey)
-
-	if orderData.Status == consts.OrderStatusReadyToShip {
-		go s.refreshOrderDetail(shopID, orderData.OrderSN)
-	}
 }
 
 // HandleTrackingUpdate 处理物流追踪更新
@@ -329,8 +332,10 @@ func (s *WebhookService) HandleReservedOrder(ctx context.Context, shopID uint64,
 func (s *WebhookService) LogWebhook(ctx context.Context, shopID uint64, code int, eventType string, data any) {
 	dataJSON, _ := json.Marshal(data)
 
+	logID, _ := s.idGenerator.GenerateOperationLogID(ctx)
 	logTable := database.GetOperationLogTableName(shopID)
 	log := &models.OperationLog{
+		ID:            uint64(logID),
 		ShopID:        shopID,
 		OperationType: consts.OpTypeWebhook,
 		OperationDesc: fmt.Sprintf("[%s] code=%d data=%s", eventType, code, string(dataJSON)),
@@ -340,7 +345,7 @@ func (s *WebhookService) LogWebhook(ctx context.Context, shopID uint64, code int
 	s.db.Table(logTable).Create(log)
 }
 
-func (s *WebhookService) refreshOrderDetail(shopID uint64, orderSN string) {
+func (s *WebhookService) refreshOrderDetail(shopID uint64, orderTable, orderSN string) {
 	ctx, cancel := NewBackgroundContext()
 	defer cancel()
 
@@ -370,17 +375,14 @@ func (s *WebhookService) refreshOrderDetail(shopID uint64, orderSN string) {
 		return
 	}
 
-	s.saveOrderFromWebhook(ctx, shopID, &detailResp.Response.OrderList[0])
+	s.saveOrderFromWebhook(ctx, orderTable, shopID, shop.Region, &detailResp.Response.OrderList[0])
 }
 
-func (s *WebhookService) saveOrderFromWebhook(ctx context.Context, shopID uint64, detail *shopee.OrderDetail) {
-	var shop models.Shop
-	s.db.Where("shop_id = ?", shopID).First(&shop)
-
+func (s *WebhookService) saveOrderFromWebhook(ctx context.Context, orderTable string, shopID uint64, region string, detail *shopee.OrderDetail) {
 	order := models.Order{
 		ShopID:          shopID,
 		OrderSN:         detail.OrderSN,
-		Region:          shop.Region,
+		Region:          region,
 		OrderStatus:     detail.OrderStatus,
 		BuyerUserID:     uint64(detail.BuyerUserID),
 		BuyerUsername:   detail.BuyerUsername,
@@ -397,8 +399,6 @@ func (s *WebhookService) saveOrderFromWebhook(ctx context.Context, shopID uint64
 		createTime := time.Unix(detail.CreateTime, 0)
 		order.CreateTime = &createTime
 	}
-
-	orderTable := database.GetOrderTableName(shopID)
 	var existing models.Order
 	if err := s.db.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).First(&existing).Error; err == nil {
 		if !existing.StatusLocked {
@@ -406,13 +406,17 @@ func (s *WebhookService) saveOrderFromWebhook(ctx context.Context, shopID uint64
 			s.db.Table(orderTable).Where("id = ?", order.ID).Updates(&order)
 		}
 	} else {
+		orderID, _ := s.idGenerator.GenerateOrderID(ctx)
+		order.ID = uint64(orderID)
 		s.db.Table(orderTable).Create(&order)
 	}
 }
 
 func (s *WebhookService) logError(ctx context.Context, shopID uint64, code int, errType string, err error) {
+	logID, _ := s.idGenerator.GenerateOperationLogID(ctx)
 	logTable := database.GetOperationLogTableName(shopID)
 	log := &models.OperationLog{
+		ID:            uint64(logID),
 		ShopID:        shopID,
 		OperationType: consts.OpTypeWebhook,
 		OperationDesc: fmt.Sprintf("[error] code=%d type=%s error=%s", code, errType, err.Error()),

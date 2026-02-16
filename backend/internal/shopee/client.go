@@ -38,6 +38,11 @@ func NewClient(region string) *Client {
 	}
 }
 
+// GetHost 获取当前客户端的API Host（用于调试日志）
+func (c *Client) GetHost() string {
+	return c.host
+}
+
 func (c *Client) generateSign(path string, timestamp int64, accessToken string, shopID uint64) string {
 	var baseStr string
 	if accessToken != "" && shopID > 0 {
@@ -278,10 +283,21 @@ func (c *Client) GetOrderList(accessToken string, shopID uint64, timeRangeField 
 		params.Set("order_status", orderStatus)
 	}
 
+	fmt.Printf("[SyncDebug][API] GetOrderList 请求: host=%s shop_id=%d time_from=%d time_to=%d cursor=%q\n",
+		c.host, shopID, timeFrom, timeTo, cursor)
+
 	respBody, err := c.Get(path, params, accessToken, shopID)
 	if err != nil {
+		fmt.Printf("[SyncDebug][API] GetOrderList 请求失败: %v\n", err)
 		return nil, err
 	}
+
+	// [调试日志] 打印原始响应（截断到500字符）
+	respStr := string(respBody)
+	if len(respStr) > 500 {
+		respStr = respStr[:500] + "...(truncated)"
+	}
+	fmt.Printf("[SyncDebug][API] GetOrderList 原始响应: %s\n", respStr)
 
 	var result OrderListResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
@@ -289,6 +305,8 @@ func (c *Client) GetOrderList(accessToken string, shopID uint64, timeRangeField 
 	}
 
 	if result.Error != "" {
+		fmt.Printf("[SyncDebug][API] GetOrderList API错误: error=%s message=%s request_id=%s\n",
+			result.Error, result.Message, result.RequestID)
 		return nil, fmt.Errorf("获取订单列表失败: %s - %s", result.Error, result.Message)
 	}
 

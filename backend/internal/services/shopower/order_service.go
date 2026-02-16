@@ -24,6 +24,7 @@ type OrderService struct {
 	shopService *ShopService
 	shardedDB   *database.ShardedDB
 	rs          *redsync.Redsync
+	idGenerator *utils.IDGenerator
 }
 
 // NewOrderService 创建订单服务
@@ -34,6 +35,7 @@ func NewOrderService() *OrderService {
 		shopService: NewShopService(),
 		shardedDB:   database.NewShardedDB(db),
 		rs:          database.GetRedsync(),
+		idGenerator: utils.NewIDGenerator(database.GetRedis()),
 	}
 }
 
@@ -84,10 +86,15 @@ func (s *OrderService) SyncOrdersWithShopNoLock(ctx context.Context, shop *model
 func (s *OrderService) syncOrdersInternal(ctx context.Context, shop *models.Shop, timeFrom, timeTo time.Time) (int, error) {
 	shopID := shop.ShopID
 
+	// [调试日志] 打印同步参数
+	fmt.Printf("[SyncDebug] 店铺=%d Region=%s timeFrom=%s timeTo=%s\n",
+		shopID, shop.Region, timeFrom.Format("2006-01-02 15:04:05"), timeTo.Format("2006-01-02 15:04:05"))
+
 	accessToken, err := s.getAccessToken(ctx, shopID)
 	if err != nil {
 		return 0, fmt.Errorf("获取访问令牌失败: %w", err)
 	}
+	fmt.Printf("[SyncDebug] 店铺=%d AccessToken=%s...(前20字符)\n", shopID, truncateStr(accessToken, 20))
 
 	// === 外层循环：分时间段同步 ===
 	// Shopee API 限制单次查询最多 15 天，所以需要将大时间范围拆分
@@ -96,21 +103,30 @@ func (s *OrderService) syncOrdersInternal(ctx context.Context, shop *models.Shop
 	fromTs := timeFrom.Unix()
 	toTs := timeTo.Unix()
 	totalCount := 0
+	chunkIdx := 0
 
 	for fromTs < toTs {
 		endTs := fromTs + maxRange // 15天
 		if endTs > toTs {
 			endTs = toTs
 		}
+		chunkIdx++
+		fmt.Printf("[SyncDebug] 店铺=%d 时间段#%d: %s ~ %s (unix: %d ~ %d)\n",
+			shopID, chunkIdx,
+			time.Unix(fromTs, 0).Format("2006-01-02 15:04:05"),
+			time.Unix(endTs, 0).Format("2006-01-02 15:04:05"),
+			fromTs, endTs)
 
 		count, err := s.syncOrdersInRange(ctx, shopID, shop.Region, accessToken, fromTs, endTs, "")
 		if err != nil {
 			return totalCount, err
 		}
+		fmt.Printf("[SyncDebug] 店铺=%d 时间段#%d 获取到 %d 条订单\n", shopID, chunkIdx, count)
 		totalCount += count
 		fromTs = endTs
 	}
 
+	fmt.Printf("[SyncDebug] 店铺=%d 同步总计 %d 条订单, 共 %d 个时间段\n", shopID, totalCount, chunkIdx)
 	s.shopService.UpdateLastSyncTime(shopID)
 	return totalCount, nil
 }
@@ -122,6 +138,10 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 	cursor := ""
 	pageSize := consts.ShopeeOrderListPageSize
 	totalCount := 0
+	pageIdx := 0
+
+	fmt.Printf("[SyncDebug] syncOrdersInRange 店铺=%d region=%s host=%s timeFrom=%d timeTo=%d orderStatus=%q\n",
+		shopID, region, client.GetHost(), timeFrom, timeTo, orderStatus)
 
 	// === 中层循环：分页获取订单列表 ===
 	// Shopee API 单次最多返回 100 个订单号，通过 cursor 分页获取所有订单
@@ -131,6 +151,7 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 			return totalCount, fmt.Errorf("限流等待被取消: %w", err)
 		}
 
+		pageIdx++
 		var listResp *shopee.OrderListResponse
 		err := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
 			var err error
@@ -138,10 +159,15 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 			return err
 		})
 		if err != nil {
+			fmt.Printf("[SyncDebug] 店铺=%d 第%d页获取订单列表失败: %v\n", shopID, pageIdx, err)
 			return totalCount, fmt.Errorf("获取订单列表失败: %w", err)
 		}
 
+		fmt.Printf("[SyncDebug] 店铺=%d 第%d页: 返回 %d 条订单, more=%v, nextCursor=%q\n",
+			shopID, pageIdx, len(listResp.Response.OrderList), listResp.Response.More, listResp.Response.NextCursor)
+
 		if len(listResp.Response.OrderList) == 0 {
+			fmt.Printf("[SyncDebug] 店铺=%d 第%d页: 订单列表为空，结束分页\n", shopID, pageIdx)
 			break
 		}
 
@@ -260,6 +286,16 @@ func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail 
 			shipByDate = &t
 		}
 
+		// 使用分表
+		orderTable := database.GetOrderTableName(shopID)
+		orderItemTable := database.GetOrderItemTableName(shopID)
+		orderAddressTable := database.GetOrderAddressTableName(shopID)
+
+		// 查询是否已存在
+		var existingOrder models.Order
+		isNew := tx.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).
+			First(&existingOrder).Error != nil
+
 		order := models.Order{
 			ShopID:          shopID,
 			OrderSN:         detail.OrderSN,
@@ -277,14 +313,22 @@ func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail 
 			UpdateTime:      updateTime,
 		}
 
-		// 使用分表
-		orderTable := database.GetOrderTableName(shopID)
-		orderItemTable := database.GetOrderItemTableName(shopID)
-		orderAddressTable := database.GetOrderAddressTableName(shopID)
-
-		if err := tx.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).
-			Assign(order).FirstOrCreate(&order).Error; err != nil {
-			return err
+		if isNew {
+			// 新订单：生成ID后插入
+			orderID, err := s.idGenerator.GenerateOrderID(ctx)
+			if err != nil {
+				return fmt.Errorf("生成订单ID失败: %w", err)
+			}
+			order.ID = uint64(orderID)
+			if err := tx.Table(orderTable).Create(&order).Error; err != nil {
+				return err
+			}
+		} else {
+			// 已存在：更新
+			order.ID = existingOrder.ID
+			if err := tx.Table(orderTable).Where("id = ?", existingOrder.ID).Save(&order).Error; err != nil {
+				return err
+			}
 		}
 
 		// 更新订单商品（先删除旧数据，再插入新数据）
@@ -292,7 +336,12 @@ func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail 
 			return err
 		}
 		for _, item := range detail.ItemList {
+			itemID, err := s.idGenerator.GenerateOrderItemID(ctx)
+			if err != nil {
+				return fmt.Errorf("生成订单商品ID失败: %w", err)
+			}
 			orderItem := models.OrderItem{
+				ID:        uint64(itemID),
 				OrderID:   order.ID,
 				ShopID:    shopID,
 				OrderSN:   detail.OrderSN,
@@ -314,8 +363,13 @@ func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail 
 		if err := tx.Table(orderAddressTable).Where("order_id = ?", order.ID).Delete(&models.OrderAddress{}).Error; err != nil {
 			return err
 		}
+		addrID, err := s.idGenerator.GenerateOrderAddressID(ctx)
+		if err != nil {
+			return fmt.Errorf("生成订单地址ID失败: %w", err)
+		}
 		addr := detail.RecipientAddress
 		orderAddress := models.OrderAddress{
+			ID:          uint64(addrID),
 			OrderID:     order.ID,
 			ShopID:      shopID,
 			OrderSN:     detail.OrderSN,
@@ -375,7 +429,12 @@ func (s *OrderService) saveOrderWithoutStatus(ctx context.Context, shopID uint64
 			return err
 		}
 		for _, item := range detail.ItemList {
+			itemID, err := s.idGenerator.GenerateOrderItemID(ctx)
+			if err != nil {
+				return fmt.Errorf("生成订单商品ID失败: %w", err)
+			}
 			orderItem := models.OrderItem{
+				ID:        uint64(itemID),
 				OrderID:   orderID,
 				ShopID:    shopID,
 				OrderSN:   detail.OrderSN,
@@ -397,8 +456,13 @@ func (s *OrderService) saveOrderWithoutStatus(ctx context.Context, shopID uint64
 		if err := tx.Table(orderAddressTable).Where("order_id = ?", orderID).Delete(&models.OrderAddress{}).Error; err != nil {
 			return err
 		}
+		addrID, err := s.idGenerator.GenerateOrderAddressID(ctx)
+		if err != nil {
+			return fmt.Errorf("生成订单地址ID失败: %w", err)
+		}
 		addr := detail.RecipientAddress
 		orderAddress := models.OrderAddress{
+			ID:          uint64(addrID),
 			OrderID:     orderID,
 			ShopID:      shopID,
 			OrderSN:     detail.OrderSN,
@@ -734,4 +798,12 @@ func (s *OrderService) checkAndSetUpdateTime(ctx context.Context, rdb *redis.Cli
 		return true
 	}
 	return result == 1
+}
+
+// truncateStr 截断字符串用于日志输出
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
 }

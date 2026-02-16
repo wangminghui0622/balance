@@ -125,7 +125,9 @@ const (
 )
 
 // ==================== 路由前缀 ====================
-
+const (
+	RouteWebhook = "/api/v1/balance/admin/webhook"
+)
 const (
 	AdminPrefix    = "/api/v1/balance/admin"
 	AppPrefix      = "/api/v1/balance/app"
@@ -135,7 +137,6 @@ const (
 )
 
 // ==================== 路由路径 ====================
-
 const (
 	RouteHealth = "/health"
 )
@@ -149,10 +150,6 @@ const (
 	RouteAuthMe            = "/auth/me"
 	RouteAuthSendCode      = "/auth/send-code"
 	RouteAuthResetPassword = "/auth/reset-password"
-)
-
-const (
-	RouteWebhook = "/webhook"
 )
 
 // ==================== 店主路由 (shopower) ====================
