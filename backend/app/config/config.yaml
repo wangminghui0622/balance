@@ -70,6 +70,19 @@ email:
   from: your_email@qq.com
   from_name: 天平系统
 
+# 第三方支付配置（预留，app端暂不使用）
+payment:
+  paypal:
+    enabled: false
+  alipay:
+    enabled: false
+  linepay:
+    enabled: false
+  visa:
+    enabled: false
+  wechat:
+    enabled: false
+
 # 日志配置
 log:
   level: debug  # debug, info, warn, error

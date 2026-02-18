@@ -107,7 +107,7 @@ func SetupRouter(mode string, cfg *config.Config) *gin.Engine {
 				// 结算明细管理
 				shopowerEscrowHandler := shopower.NewEscrowHandler()
 				shopowerAuth.GET(consts.RouteShopowerEscrows, shopowerEscrowHandler.ListPendingEscrows)
-				shopowerAuth.POST(consts.RouteShopowerEscrowSync, shopowerEscrowHandler.SyncEscrow)
+				shopowerAuth.POST(consts.RouteShopowerEscrowSync, shopowerEscrowHandler.SyncEscrow) //获取明细
 				shopowerAuth.GET(consts.RouteShopowerEscrowDetail, shopowerEscrowHandler.GetEscrow)
 				shopowerAuth.POST("/escrows/batch-sync", shopowerEscrowHandler.BatchSyncEscrows)
 
@@ -136,8 +136,8 @@ func SetupRouter(mode string, cfg *config.Config) *gin.Engine {
 				shopowerAuth.GET("/withdraw/list", shopowerAccountHandler.GetWithdrawApplications)
 
 				// 充值管理
-				shopowerAuth.POST("/recharge/apply", shopowerAccountHandler.ApplyRecharge)
-				shopowerAuth.GET("/recharge/list", shopowerAccountHandler.GetRechargeApplications)
+				shopowerAuth.POST("/recharge", shopowerAccountHandler.Recharge)
+				shopowerAuth.GET("/recharge/list", shopowerAccountHandler.GetRechargeRecords)
 			}
 		}
 
@@ -236,7 +236,7 @@ func SetupRouter(mode string, cfg *config.Config) *gin.Engine {
 			platformGroup.POST("/withdraw/confirm_paid", platformAccountHandler.ConfirmWithdrawPaid)
 
 			// 充值审核
-			platformGroup.GET("/recharge/list", platformAccountHandler.GetRechargeApplications)
+			platformGroup.GET("/recharge/list", platformAccountHandler.GetRechargeRecords)
 			platformGroup.POST("/recharge/approve", platformAccountHandler.ApproveRecharge)
 			platformGroup.POST("/recharge/reject", platformAccountHandler.RejectRecharge)
 

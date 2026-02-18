@@ -12,7 +12,7 @@
             <div class="order-header">
               <div class="order-number">
                 订单编号: {{ order.orderNo }}
-                <el-tag size="small" type="success" style="margin-left: 8px;">付款状态</el-tag>
+                <el-tag v-if="order.prepaymentStatus > 0" size="small" :type="PREPAYMENT_STATUS_TAG_TYPE[order.prepaymentStatus]" style="margin-left: 8px;">{{ PREPAYMENT_STATUS_TEXT[order.prepaymentStatus] }}</el-tag>
               </div>
               <div class="order-amount-info">
                 <span>未结算佣金: NT${{ order.unsettledCommission }}</span>
@@ -159,7 +159,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { orderApi, type Order as ApiOrder } from '@share/api/order'
-import { HTTP_STATUS } from '@share/constants'
+import { HTTP_STATUS, PREPAYMENT_STATUS_TEXT, PREPAYMENT_STATUS_TAG_TYPE } from '@share/constants'
 
 interface Product {
   image: string
@@ -179,6 +179,7 @@ interface Order {
   product?: Product
   orderAmount: string
   status?: string
+  prepaymentStatus: number
   unsettledCommission?: string
   unsettledPayment?: string
   shopeeStatus?: string
@@ -244,9 +245,10 @@ const transformOrder = (apiOrder: ApiOrder): Order => {
     product,
     orderAmount: apiOrder.total_amount,
     status: apiOrder.order_status,
+    prepaymentStatus: apiOrder.prepayment_status ?? 0,
     shopeeStatus: statusMap[apiOrder.order_status] || apiOrder.order_status,
     shopeeAmount: apiOrder.total_amount,
-    unsettledCommission: '0.00', // 佣金数据需要额外接口
+    unsettledCommission: '0.00',
     unsettledPayment: '0.00',
     settledPayment: '0.00'
   }

@@ -60,10 +60,12 @@ const (
 	WebhookOrderStatus       = 3
 	WebhookTrackingUpdate    = 4
 	WebhookBannedItem        = 5
+	WebhookReturnCreated     = 6  // 退货退款创建
 	WebhookPromotionUpdate   = 7
 	WebhookReservedStock     = 8
 	WebhookBuyerCancelOrder  = 9
 	WebhookSellerCancelOrder = 9
+	WebhookReturnStatusChange = 15 // 退货退款状态变更
 )
 
 // ==================== 操作状态 ====================
@@ -86,7 +88,10 @@ const (
 	KeyLogistics       = "shopee:logistics:%d"
 	KeyWebhookDedup    = "shopee:webhook:dedup:%d:%s:%d:%d"
 	KeyOrderLock       = "shopee:lock:order:%d:%s"
-	KeyOrderUpdateTime = "shopee:order:update_time:%d:%s"
+	KeyOrderUpdateTime      = "shopee:order:update_time:%d:%s"
+	KeyPrepaymentNotified = "balance:prepayment:notified:%d"     // shopID — 预付款不足通知去重（避免短时间重复通知）
+	KeyReturnLock         = "shopee:lock:return:%d:%s"           // shopID, returnSN — 退货退款处理锁
+	KeyReturnDedup        = "shopee:webhook:return:dedup:%d:%s:%d" // shopID, returnSN, eventCode — 退货Webhook去重（不含timestamp，防止虾皮重试绕过去重）
 )
 
 // ==================== 缓存过期时间 ====================
@@ -95,13 +100,15 @@ const (
 	TokenExpireBuffer  = 5 * time.Minute
 	ShopInfoExpire     = 1 * time.Hour
 	OrderStatusExpire  = 30 * time.Minute
-	SyncLockExpire     = 10 * time.Minute // 增加到10分钟，防止长时间同步锁过期
+	SyncLockExpire     = 15 * time.Minute // 订单巡检8min + 退货巡检3min + 余量，防止锁在任务完成前过期
 	ShipLockExpire     = 2 * time.Minute  // 增加到2分钟，防止API调用超时
 	RateLimitExpire    = 1 * time.Minute
 	LogisticsExpire    = 1 * time.Hour
 	WebhookDedupExpire = 5 * time.Minute
 	OrderLockExpire    = 30 * time.Second // 增加到30秒，防止数据库操作超时
-	OrderUpdateTimeTTL = 24 * time.Hour
+	ReturnLockExpire   = 30 * time.Second // 退货退款处理锁过期时间
+	OrderUpdateTimeTTL         = 24 * time.Hour
+	PrepaymentNotifiedCooldown = 30 * time.Minute // 预付款不足通知冷却：30分钟内不重复通知
 )
 
 // ==================== 分页默认值 ====================

@@ -8,6 +8,7 @@ import (
 
 	"balance/backend/internal/consts"
 	"balance/backend/internal/database"
+	"balance/backend/internal/models"
 	"balance/backend/internal/services/shopower"
 	"balance/backend/internal/utils"
 
@@ -33,18 +34,19 @@ const (
 
 // DistributedSyncScheduler 分布式同步调度器
 type DistributedSyncScheduler struct {
-	db           *gorm.DB
-	rdb          *redis.Client
-	rs           *redsync.Redsync
-	orderService *shopower.OrderService
-	shopService  *shopower.ShopService
-	pool         *ants.Pool
-	interval     time.Duration
-	stopChan     chan struct{}
-	wg           sync.WaitGroup
-	running      bool
-	mu           sync.Mutex
-	logger       *zap.SugaredLogger
+	db            *gorm.DB
+	rdb           *redis.Client
+	rs            *redsync.Redsync
+	orderService  *shopower.OrderService
+	shopService   *shopower.ShopService
+	returnService *ReturnService
+	pool          *ants.Pool
+	interval      time.Duration
+	stopChan      chan struct{}
+	wg            sync.WaitGroup
+	running       bool
+	mu            sync.Mutex
+	logger        *zap.SugaredLogger
 }
 
 // NewDistributedSyncScheduler 创建分布式同步调度器
@@ -69,15 +71,16 @@ func NewDistributedSyncScheduler(db *gorm.DB, rdb *redis.Client, logger ...*zap.
 	}
 
 	return &DistributedSyncScheduler{
-		db:           db,
-		rdb:          rdb,
-		rs:           database.GetRedsync(),
-		orderService: shopower.NewOrderService(),
-		shopService:  shopower.NewShopService(),
-		pool:         pool,
-		interval:     30 * time.Minute,
-		stopChan:     make(chan struct{}),
-		logger:       l,
+		db:            db,
+		rdb:           rdb,
+		rs:            database.GetRedsync(),
+		orderService:  NewOrderServiceWithPrepaymentCheck(),
+		shopService:   shopower.NewShopService(),
+		returnService: NewReturnService(),
+		pool:          pool,
+		interval:      30 * time.Minute,
+		stopChan:      make(chan struct{}),
+		logger:        l,
 	}
 }
 
@@ -99,7 +102,7 @@ func (s *DistributedSyncScheduler) Start() {
 	s.wg.Add(1)
 	go s.runDispatcher()
 
-	s.logger.Infof("[DistributedSync] 分布式同步已启动，协程池大小: %d", workerCount)
+	s.logger.Infof("[DistributedSync] 分布式巡检已启动（间隔 %v），协程池大小: %d", s.interval, workerCount)
 }
 
 // Stop 停止分布式同步
@@ -118,7 +121,7 @@ func (s *DistributedSyncScheduler) Stop() {
 	// 释放协程池
 	s.pool.Release()
 
-	s.logger.Info("[DistributedSync] 分布式同步已停止")
+	s.logger.Info("[DistributedSync] 分布式巡检已停止")
 }
 
 // runScheduler 运行调度器 (尝试成为主节点)
@@ -270,51 +273,76 @@ func (s *DistributedSyncScheduler) processShop(shopID uint64) {
 		s.rdb.SRem(ctx, syncShopProcessing, shopID)
 	}()
 
-	// 执行增量同步
+	// 执行巡检
 	s.syncShopOrders(shopID)
 }
 
 // 订单同步任务超时时间（应小于锁TTL，确保任务在锁过期前完成）
 const orderSyncTaskTimeout = 8 * time.Minute
 
-// syncShopOrders 同步店铺订单 (增量)
+// syncShopOrders 巡检单个店铺的订单
+// 从 Shopee 拉取订单列表，与本地数据库比对，发现遗漏或状态不一致时才写入
 func (s *DistributedSyncScheduler) syncShopOrders(shopID uint64) {
+	// 记录开始时间，用于计算整体耗时
 	startTime := time.Now()
-	s.logger.Infof("[Sync] 开始同步店铺 %d", shopID)
+	s.logger.Infof("[Patrol] 开始巡检店铺 %d", shopID)
 
-	// 创建任务级超时 context
+	// 创建带超时的 context，防止单个店铺巡检卡住（上限 8 分钟）
 	ctx, cancel := context.WithTimeout(context.Background(), orderSyncTaskTimeout)
 	defer cancel()
 
-	// 获取店铺信息，包括上次同步时间
+	// 从数据库获取店铺信息（包含 region、last_sync_at 等）
 	shop, err := s.shopService.GetShopByID(shopID)
 	if err != nil {
-		s.logger.Errorf("[Sync] 获取店铺 %d 信息失败: %v", shopID, err)
+		s.logger.Errorf("[Patrol] 获取店铺 %d 信息失败: %v", shopID, err)
 		return
 	}
 
-	// 增量同步：从上次同步时间开始
+	// 确定巡检的起始时间：优先使用上次同步时间，否则回溯 30 天
 	var timeFrom time.Time
 	if shop.LastSyncAt != nil && !shop.LastSyncAt.IsZero() {
 		timeFrom = *shop.LastSyncAt
 	} else {
-		// 首次同步，拉取最近30天
 		timeFrom = time.Now().Add(-30 * 24 * time.Hour)
 	}
+	// 巡检截止时间为当前时刻
 	timeTo := time.Now()
 
-	count, err := s.orderService.SyncOrdersWithShopNoLock(ctx, shop, timeFrom, timeTo)
+	// 执行巡检：拉取 Shopee 订单列表 → 与本地 DB 比对 → 补录遗漏/不一致的订单
+	// found = Shopee 返回的订单总数，patched = 实际补录的订单数
+	found, patched, err := s.orderService.PatrolOrders(ctx, shop, timeFrom, timeTo)
+	// 计算本次巡检总耗时
 	elapsed := time.Since(startTime)
 
+	// 错误处理：区分超时和其他错误
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			s.logger.Errorf("[Sync] 店铺 %d 同步任务超时（耗时 %v，超时限制 %v）", shopID, elapsed, orderSyncTaskTimeout)
+			s.logger.Errorf("[Patrol] 店铺 %d 巡检超时（耗时 %v）", shopID, elapsed)
 		} else {
-			s.logger.Errorf("[Sync] 店铺 %d 同步失败（耗时 %v）: %v", shopID, elapsed, err)
+			s.logger.Errorf("[Patrol] 店铺 %d 巡检失败（耗时 %v）: %v", shopID, elapsed, err)
 		}
 		return
 	}
-	s.logger.Infof("[Sync] 店铺 %d 同步完成，新增/更新 %d 条订单（耗时 %v）", shopID, count, elapsed)
+
+	// 输出巡检结果日志
+	if patched > 0 {
+		s.logger.Infof("[Patrol] 店铺 %d 巡检完成，Shopee共 %d 条，补录 %d 条（耗时 %v）", shopID, found, patched, elapsed)
+	} else {
+		s.logger.Infof("[Patrol] 店铺 %d 巡检完成，Shopee共 %d 条，无遗漏（耗时 %v）", shopID, found, elapsed)
+	}
+
+	// ===== 退货退款巡检 =====
+	// 获取店铺授权信息，用于调用退货 API
+	var auth models.ShopAuthorization
+	if authErr := s.db.Where("shop_id = ?", shopID).First(&auth).Error; authErr == nil {
+		returnCtx, returnCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer returnCancel()
+		if returnErr := s.returnService.SyncReturns(returnCtx, shopID, auth.AccessToken, shop.Region); returnErr != nil {
+			s.logger.Errorf("[Patrol] 店铺 %d 退货巡检失败: %v", shopID, returnErr)
+		} else {
+			s.logger.Infof("[Patrol] 店铺 %d 退货巡检完成", shopID)
+		}
+	}
 }
 
 // GetQueueLength 获取队列长度 (用于监控)

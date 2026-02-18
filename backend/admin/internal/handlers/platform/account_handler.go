@@ -475,9 +475,9 @@ func (h *AccountHandler) GetPlatformCommissionTransactions(c *gin.Context) {
 	utils.SuccessWithPage(c, transactions, total, page, pageSize)
 }
 
-// GetRechargeApplications 获取充值申请列表 (平台审核)
+// GetRechargeRecords 获取充值申请列表 (平台审核)
 // GET /platform/recharge/list?status=0&page=1&page_size=20
-func (h *AccountHandler) GetRechargeApplications(c *gin.Context) {
+func (h *AccountHandler) GetRechargeRecords(c *gin.Context) {
 	status, _ := strconv.Atoi(c.DefaultQuery("status", "-1"))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
@@ -490,7 +490,7 @@ func (h *AccountHandler) GetRechargeApplications(c *gin.Context) {
 	}
 
 	// adminID = 0 表示查询所有用户的充值申请
-	applications, total, err := h.accountService.GetRechargeApplications(c.Request.Context(), 0, int8(status), page, pageSize)
+	applications, total, err := h.accountService.GetRechargeRecords(c.Request.Context(), 0, int8(status), page, pageSize)
 	if err != nil {
 		utils.Error(c, 500, err.Error())
 		return

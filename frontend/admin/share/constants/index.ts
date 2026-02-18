@@ -30,6 +30,25 @@ export const USER_TYPE_NUM = {
 export type UserType = typeof USER_TYPE[keyof typeof USER_TYPE]
 export type UserTypeNum = typeof USER_TYPE_NUM[keyof typeof USER_TYPE_NUM]
 
+// ==================== 预付款状态 ====================
+export const PREPAYMENT_STATUS = {
+  UNCHECKED: 0,     // 未检查
+  SUFFICIENT: 1,    // 充足（已付款）
+  INSUFFICIENT: 2   // 不足（未付款）
+} as const
+
+export const PREPAYMENT_STATUS_TEXT: Record<number, string> = {
+  [PREPAYMENT_STATUS.UNCHECKED]: '',
+  [PREPAYMENT_STATUS.SUFFICIENT]: '已付款',
+  [PREPAYMENT_STATUS.INSUFFICIENT]: '未付款'
+}
+
+export const PREPAYMENT_STATUS_TAG_TYPE: Record<number, string> = {
+  [PREPAYMENT_STATUS.UNCHECKED]: 'info',
+  [PREPAYMENT_STATUS.SUFFICIENT]: 'success',
+  [PREPAYMENT_STATUS.INSUFFICIENT]: 'danger'
+}
+
 // ==================== 路由路径 ====================
 export const ROUTE_PATH = {
   LOGIN: '/login',

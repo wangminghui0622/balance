@@ -36,147 +36,152 @@ func (s *SettlementService) GenerateSettlementNo() string {
 }
 
 // SettleOrder 结算订单 (Shopee 结算后调用) - 需要shopID来定位分表
-// 使用 FOR UPDATE 行锁防止并发结算同一订单
+//
+// 整个流程在一个事务中完成：
+//  1. FOR UPDATE 锁定发货记录 → 防止并发结算
+//  2. 检查是否已结算（幂等）
+//  3. 创建结算记录
+//  4. 执行资金划转（内部各账户操作有自己的事务和行锁）
+//  5. 更新结算状态 + 发货记录状态
 func (s *SettlementService) SettleOrder(ctx context.Context, shopID uint64, orderSN string, escrowAmount decimal.Decimal) (*models.OrderSettlement, error) {
 	shipmentRecordTable := database.GetOrderShipmentRecordTableName(shopID)
 	settlementTable := database.GetOrderSettlementTableName(shopID)
 
-	// 1. 获取发货记录（使用 FOR UPDATE 行锁防止并发结算）
-	var shipmentRecord models.OrderShipmentRecord
-	if err := s.db.Table(shipmentRecordTable).Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_sn = ? AND status = ?", orderSN, models.ShipmentRecordStatusShipped).First(&shipmentRecord).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, fmt.Errorf("未找到发货记录或订单未发货")
+	var settlement *models.OrderSettlement
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// 1. 获取发货记录（FOR UPDATE 行锁防止并发结算同一订单）
+		var shipmentRecord models.OrderShipmentRecord
+		if err := tx.Table(shipmentRecordTable).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("order_sn = ? AND status = ?", orderSN, models.ShipmentRecordStatusShipped).
+			First(&shipmentRecord).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("未找到发货记录或订单未发货")
+			}
+			return err
 		}
+
+		// 2. 检查是否已结算（幂等）
+		var existingSettlement models.OrderSettlement
+		if err := tx.Table(settlementTable).Where("order_sn = ?", orderSN).First(&existingSettlement).Error; err == nil {
+			if existingSettlement.Status == models.OrderSettlementCompleted {
+				return fmt.Errorf("订单已结算")
+			}
+		}
+
+		// 3. 获取分成配置
+		config, err := s.getProfitShareConfig(shipmentRecord.ShopID, shipmentRecord.OperatorID)
+		if err != nil {
+			return fmt.Errorf("获取分成配置失败: %w", err)
+		}
+
+		// 4. 计算利润和分成
+		totalCost := shipmentRecord.TotalCost
+		profit := escrowAmount.Sub(totalCost)
+		hundred := decimal.NewFromInt(100)
+		platformShare := profit.Mul(config.PlatformShareRate).Div(hundred).Round(2)
+		operatorShare := profit.Mul(config.OperatorShareRate).Div(hundred).Round(2)
+		shopOwnerShare := profit.Sub(platformShare).Sub(operatorShare)
+		operatorIncome := totalCost.Add(operatorShare)
+
+		// 5. 创建结算记录
+		settlement = &models.OrderSettlement{
+			SettlementNo:       s.GenerateSettlementNo(),
+			ShopID:             shipmentRecord.ShopID,
+			OrderSN:            orderSN,
+			OrderID:            shipmentRecord.OrderID,
+			ShopOwnerID:        shipmentRecord.ShopOwnerID,
+			OperatorID:         shipmentRecord.OperatorID,
+			Currency:           shipmentRecord.Currency,
+			EscrowAmount:       escrowAmount,
+			GoodsCost:          shipmentRecord.GoodsCost,
+			ShippingCost:       shipmentRecord.ShippingCost,
+			TotalCost:          totalCost,
+			Profit:             profit,
+			PlatformShareRate:  config.PlatformShareRate,
+			OperatorShareRate:  config.OperatorShareRate,
+			ShopOwnerShareRate: config.ShopOwnerShareRate,
+			PlatformShare:      platformShare,
+			OperatorShare:      operatorShare,
+			ShopOwnerShare:     shopOwnerShare,
+			OperatorIncome:     operatorIncome,
+			Status:             models.OrderSettlementPending,
+		}
+		if err := tx.Table(settlementTable).Create(settlement).Error; err != nil {
+			return fmt.Errorf("创建结算记录失败: %w", err)
+		}
+
+		// 6. 执行资金划转（使用 InTx 版本，复用同一事务连接，避免嵌套事务连接池死锁）
+		if err := s.executeSettlementInTx(tx, ctx, settlement, &shipmentRecord); err != nil {
+			return fmt.Errorf("执行结算失败: %w", err)
+		}
+
+		// 7. 更新结算状态为已完成
+		now := time.Now()
+		if err := tx.Table(settlementTable).Where("id = ?", settlement.ID).Updates(map[string]interface{}{
+			"status":     models.OrderSettlementCompleted,
+			"settled_at": &now,
+		}).Error; err != nil {
+			return err
+		}
+		settlement.Status = models.OrderSettlementCompleted
+		settlement.SettledAt = &now
+
+		// 8. 更新发货记录状态为已结算
+		return tx.Table(shipmentRecordTable).Where("id = ?", shipmentRecord.ID).Updates(map[string]interface{}{
+			"status":        models.ShipmentRecordStatusCompleted,
+			"settlement_id": settlement.ID,
+		}).Error
+	})
+
+	if err != nil {
 		return nil, err
 	}
-
-	// 2. 检查是否已结算
-	var existingSettlement models.OrderSettlement
-	if err := s.db.Table(settlementTable).Where("order_sn = ?", orderSN).First(&existingSettlement).Error; err == nil {
-		if existingSettlement.Status == models.OrderSettlementCompleted {
-			return nil, fmt.Errorf("订单已结算")
-		}
-	}
-
-	// 3. 获取分成配置
-	config, err := s.getProfitShareConfig(shipmentRecord.ShopID, shipmentRecord.OperatorID)
-	if err != nil {
-		return nil, fmt.Errorf("获取分成配置失败: %w", err)
-	}
-
-	// 4. 计算利润和分成
-	totalCost := shipmentRecord.TotalCost
-	profit := escrowAmount.Sub(totalCost)
-
-	// 分成计算
-	hundred := decimal.NewFromInt(100)
-	platformShare := profit.Mul(config.PlatformShareRate).Div(hundred).Round(2)
-	operatorShare := profit.Mul(config.OperatorShareRate).Div(hundred).Round(2)
-	shopOwnerShare := profit.Sub(platformShare).Sub(operatorShare) // 剩余给店主，避免精度问题
-
-	// 运营实际收入 = 成本 + 运营分成
-	operatorIncome := totalCost.Add(operatorShare)
-
-	// 5. 创建结算记录
-	settlement := &models.OrderSettlement{
-		SettlementNo:       s.GenerateSettlementNo(),
-		ShopID:             shipmentRecord.ShopID,
-		OrderSN:            orderSN,
-		OrderID:            shipmentRecord.OrderID,
-		ShopOwnerID:        shipmentRecord.ShopOwnerID,
-		OperatorID:         shipmentRecord.OperatorID,
-		Currency:           shipmentRecord.Currency,
-		EscrowAmount:       escrowAmount,
-		GoodsCost:          shipmentRecord.GoodsCost,
-		ShippingCost:       shipmentRecord.ShippingCost,
-		TotalCost:          totalCost,
-		Profit:             profit,
-		PlatformShareRate:  config.PlatformShareRate,
-		OperatorShareRate:  config.OperatorShareRate,
-		ShopOwnerShareRate: config.ShopOwnerShareRate,
-		PlatformShare:      platformShare,
-		OperatorShare:      operatorShare,
-		ShopOwnerShare:     shopOwnerShare,
-		OperatorIncome:     operatorIncome,
-		Status:             models.OrderSettlementPending,
-	}
-
-	if err := s.db.Table(settlementTable).Create(settlement).Error; err != nil {
-		return nil, fmt.Errorf("创建结算记录失败: %w", err)
-	}
-
-	// 6. 执行资金划转
-	err = s.executeSettlement(ctx, settlement, &shipmentRecord)
-	if err != nil {
-		settlement.Remark = fmt.Sprintf("结算失败: %s", err.Error())
-		s.db.Save(settlement)
-		return nil, fmt.Errorf("执行结算失败: %w", err)
-	}
-
-	// 7. 更新状态
-	now := time.Now()
-	settlement.Status = models.OrderSettlementCompleted
-	settlement.SettledAt = &now
-	s.db.Table(settlementTable).Where("id = ?", settlement.ID).Updates(map[string]interface{}{
-		"status":     settlement.Status,
-		"settled_at": settlement.SettledAt,
-	})
-
-	// 8. 更新发货记录状态
-	shipmentRecord.Status = models.ShipmentRecordStatusCompleted
-	shipmentRecord.SettlementID = settlement.ID
-	s.db.Table(shipmentRecordTable).Where("id = ?", shipmentRecord.ID).Updates(map[string]interface{}{
-		"status":        shipmentRecord.Status,
-		"settlement_id": shipmentRecord.SettlementID,
-	})
-
 	return settlement, nil
 }
 
-// executeSettlement 执行结算资金划转
-func (s *SettlementService) executeSettlement(ctx context.Context, settlement *models.OrderSettlement, shipmentRecord *models.OrderShipmentRecord) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		// 1. 从店铺老板冻结金额中扣除 (结算给运营)
-		// 冻结金额 = 成本，结算时从冻结金额扣除
-		_, err := s.accountService.SettlePrepayment(ctx, settlement.ShopOwnerID, shipmentRecord.FrozenAmount, settlement.OrderSN,
-			fmt.Sprintf("订单结算-成本%s", settlement.TotalCost.String()))
+// executeSettlementInTx 执行结算资金划转（复用调用方事务，避免嵌套独立事务导致连接池死锁）
+func (s *SettlementService) executeSettlementInTx(outerTx *gorm.DB, ctx context.Context, settlement *models.OrderSettlement, shipmentRecord *models.OrderShipmentRecord) error {
+	// 1. 从店铺老板冻结金额中扣除 (结算给运营)
+	_, err := s.accountService.SettlePrepaymentInTx(outerTx, ctx, settlement.ShopOwnerID, shipmentRecord.FrozenAmount, settlement.OrderSN,
+		fmt.Sprintf("订单结算-成本%s", settlement.TotalCost.String()))
+	if err != nil {
+		return fmt.Errorf("扣除店铺老板预付款失败: %w", err)
+	}
+
+	// 2. 从托管账户转出 (发货时已转入托管)
+	err = s.accountService.TransferFromEscrowInTx(outerTx, ctx, settlement.ShopOwnerID, shipmentRecord.FrozenAmount, settlement.OrderSN, "订单结算转出")
+	if err != nil {
+		return fmt.Errorf("托管账户转出失败: %w", err)
+	}
+
+	// 3. 给运营账户增加收入 (成本 + 运营分成)
+	_, err = s.accountService.AddOperatorIncomeInTx(outerTx, ctx, settlement.OperatorID, settlement.OperatorIncome, settlement.OrderSN,
+		fmt.Sprintf("订单结算-成本%s+分成%s", settlement.TotalCost.String(), settlement.OperatorShare.String()))
+	if err != nil {
+		return fmt.Errorf("增加运营收入失败: %w", err)
+	}
+
+	// 4. 给店主佣金账户增加收入 (店主分成)
+	if settlement.ShopOwnerShare.GreaterThan(decimal.Zero) {
+		_, err = s.accountService.AddShopOwnerCommissionInTx(outerTx, ctx, settlement.ShopOwnerID, settlement.ShopOwnerShare, settlement.OrderSN,
+			fmt.Sprintf("订单结算-利润分成%s%%", settlement.ShopOwnerShareRate.String()))
 		if err != nil {
-			return fmt.Errorf("扣除店铺老板预付款失败: %w", err)
+			return fmt.Errorf("增加店主佣金失败: %w", err)
 		}
+	}
 
-		// 2. 从托管账户转出 (发货时已转入托管)
-		err = s.accountService.TransferFromEscrow(ctx, settlement.ShopOwnerID, shipmentRecord.FrozenAmount, settlement.OrderSN, "订单结算转出")
+	// 5. 给平台佣金账户增加收入 (平台分成)
+	if settlement.PlatformShare.GreaterThan(decimal.Zero) {
+		_, err = s.accountService.AddPlatformCommissionInTx(outerTx, ctx, settlement.PlatformShare, settlement.OrderSN,
+			fmt.Sprintf("订单结算-平台分成%s%%", settlement.PlatformShareRate.String()))
 		if err != nil {
-			return fmt.Errorf("托管账户转出失败: %w", err)
+			return fmt.Errorf("增加平台佣金失败: %w", err)
 		}
+	}
 
-		// 3. 给运营账户增加收入 (成本 + 运营分成)
-		_, err = s.accountService.AddOperatorIncome(ctx, settlement.OperatorID, settlement.OperatorIncome, settlement.OrderSN,
-			fmt.Sprintf("订单结算-成本%s+分成%s", settlement.TotalCost.String(), settlement.OperatorShare.String()))
-		if err != nil {
-			return fmt.Errorf("增加运营收入失败: %w", err)
-		}
-
-		// 4. 给店主佣金账户增加收入 (店主分成)
-		if settlement.ShopOwnerShare.GreaterThan(decimal.Zero) {
-			_, err = s.accountService.AddShopOwnerCommission(ctx, settlement.ShopOwnerID, settlement.ShopOwnerShare, settlement.OrderSN,
-				fmt.Sprintf("订单结算-利润分成%s%%", settlement.ShopOwnerShareRate.String()))
-			if err != nil {
-				return fmt.Errorf("增加店主佣金失败: %w", err)
-			}
-		}
-
-		// 5. 给平台佣金账户增加收入 (平台分成)
-		if settlement.PlatformShare.GreaterThan(decimal.Zero) {
-			_, err = s.accountService.AddPlatformCommission(ctx, settlement.PlatformShare, settlement.OrderSN,
-				fmt.Sprintf("订单结算-平台分成%s%%", settlement.PlatformShareRate.String()))
-			if err != nil {
-				return fmt.Errorf("增加平台佣金失败: %w", err)
-			}
-		}
-
-		return nil
-	})
+	return nil
 }
 
 // getProfitShareConfig 获取分成配置
@@ -302,146 +307,128 @@ func (s *SettlementService) ProcessShopeeAdjustments(ctx context.Context) (int, 
 	return adjustedCount, nil
 }
 
-// handleAdjustment 处理单个调账记录
+// handleAdjustment 处理单个调账记录（全部在一个事务内原子完成）
 func (s *SettlementService) handleAdjustment(ctx context.Context, income *models.FinanceIncome) error {
-	// 查找原始结算记录
 	settlementTable := database.GetOrderSettlementTableName(income.ShopID)
+
+	// 查找原始结算记录
 	var originalSettlement models.OrderSettlement
 	err := s.db.Table(settlementTable).Where("order_sn = ? AND status = ?", income.OrderSN, models.OrderSettlementCompleted).First(&originalSettlement).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			// 订单尚未结算，无需处理调账
 			return nil
 		}
 		return err
 	}
 
-	// 调账金额（通常为负数，表示扣款）
 	adjustAmount := income.Amount
-
-	// 如果调账金额为0，跳过
 	if adjustAmount.IsZero() {
 		return nil
 	}
 
-	// 计算各方需要调整的金额（按原始分成比例）
 	hundred := decimal.NewFromInt(100)
 	platformAdjust := adjustAmount.Mul(originalSettlement.PlatformShareRate).Div(hundred).Round(2)
 	operatorAdjust := adjustAmount.Mul(originalSettlement.OperatorShareRate).Div(hundred).Round(2)
 	shopOwnerAdjust := adjustAmount.Sub(platformAdjust).Sub(operatorAdjust)
 
-	// 创建调账结算记录
-	adjustmentSettlement := &models.OrderSettlement{
-		SettlementNo:       s.GenerateSettlementNo(),
-		ShopID:             income.ShopID,
-		OrderSN:            income.OrderSN,
-		OrderID:            originalSettlement.OrderID,
-		ShopOwnerID:        originalSettlement.ShopOwnerID,
-		OperatorID:         originalSettlement.OperatorID,
-		Currency:           originalSettlement.Currency,
-		EscrowAmount:       adjustAmount,
-		GoodsCost:          decimal.Zero,
-		ShippingCost:       decimal.Zero,
-		TotalCost:          decimal.Zero,
-		Profit:             adjustAmount, // 调账全部计入利润调整
-		PlatformShareRate:  originalSettlement.PlatformShareRate,
-		OperatorShareRate:  originalSettlement.OperatorShareRate,
-		ShopOwnerShareRate: originalSettlement.ShopOwnerShareRate,
-		PlatformShare:      platformAdjust,
-		OperatorShare:      operatorAdjust,
-		ShopOwnerShare:     shopOwnerAdjust,
-		OperatorIncome:     operatorAdjust, // 调账时运营只调整分成部分
-		Status:             models.OrderSettlementPending,
-		Remark:             fmt.Sprintf("虾皮调账: %s", income.TransactionType),
-	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// 1. 创建调账结算记录
+		adjustmentSettlement := &models.OrderSettlement{
+			SettlementNo:       s.GenerateSettlementNo(),
+			ShopID:             income.ShopID,
+			OrderSN:            income.OrderSN,
+			OrderID:            originalSettlement.OrderID,
+			ShopOwnerID:        originalSettlement.ShopOwnerID,
+			OperatorID:         originalSettlement.OperatorID,
+			Currency:           originalSettlement.Currency,
+			EscrowAmount:       adjustAmount,
+			GoodsCost:          decimal.Zero,
+			ShippingCost:       decimal.Zero,
+			TotalCost:          decimal.Zero,
+			Profit:             adjustAmount,
+			PlatformShareRate:  originalSettlement.PlatformShareRate,
+			OperatorShareRate:  originalSettlement.OperatorShareRate,
+			ShopOwnerShareRate: originalSettlement.ShopOwnerShareRate,
+			PlatformShare:      platformAdjust,
+			OperatorShare:      operatorAdjust,
+			ShopOwnerShare:     shopOwnerAdjust,
+			OperatorIncome:     operatorAdjust,
+			Status:             models.OrderSettlementPending,
+			Remark:             fmt.Sprintf("虾皮调账: %s", income.TransactionType),
+		}
 
-	if err := s.db.Table(settlementTable).Create(adjustmentSettlement).Error; err != nil {
-		return fmt.Errorf("创建调账结算记录失败: %w", err)
-	}
+		if err := tx.Table(settlementTable).Create(adjustmentSettlement).Error; err != nil {
+			return fmt.Errorf("创建调账结算记录失败: %w", err)
+		}
 
-	// 执行调账资金划转
-	err = s.executeAdjustment(ctx, adjustmentSettlement)
-	if err != nil {
-		adjustmentSettlement.Remark = fmt.Sprintf("调账失败: %s", err.Error())
-		s.db.Table(settlementTable).Where("id = ?", adjustmentSettlement.ID).Update("remark", adjustmentSettlement.Remark)
-		return fmt.Errorf("执行调账失败: %w", err)
-	}
+		// 2. 执行调账资金划转（使用 InTx 版本，复用同一事务）
+		if err := s.executeAdjustmentInTx(tx, ctx, adjustmentSettlement); err != nil {
+			return fmt.Errorf("执行调账失败: %w", err)
+		}
 
-	// 更新状态
-	now := time.Now()
-	s.db.Table(settlementTable).Where("id = ?", adjustmentSettlement.ID).Updates(map[string]interface{}{
-		"status":     models.OrderSettlementCompleted,
-		"settled_at": &now,
+		// 3. 更新状态为已完成
+		now := time.Now()
+		return tx.Table(settlementTable).Where("id = ?", adjustmentSettlement.ID).Updates(map[string]interface{}{
+			"status":     models.OrderSettlementCompleted,
+			"settled_at": &now,
+		}).Error
 	})
-
-	return nil
 }
 
-// executeAdjustment 执行调账资金划转
-func (s *SettlementService) executeAdjustment(ctx context.Context, settlement *models.OrderSettlement) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		// 调账金额通常为负数（扣款），需要从各方账户扣除
-		// 如果为正数（补款），则增加到各方账户
-
-		// 1. 调整运营账户
-		if !settlement.OperatorShare.IsZero() {
-			if settlement.OperatorShare.GreaterThan(decimal.Zero) {
-				// 补款：增加运营收入
-				_, err := s.accountService.AddOperatorIncome(ctx, settlement.OperatorID, settlement.OperatorShare, settlement.OrderSN,
-					fmt.Sprintf("虾皮调账补款-运营分成%s", settlement.OperatorShare.String()))
-				if err != nil {
-					return fmt.Errorf("增加运营调账收入失败: %w", err)
-				}
-			} else {
-				// 扣款：从运营账户扣除
-				_, err := s.accountService.DeductOperatorBalance(ctx, settlement.OperatorID, settlement.OperatorShare.Abs(), settlement.OrderSN,
-					fmt.Sprintf("虾皮调账扣款-运营分成%s", settlement.OperatorShare.Abs().String()))
-				if err != nil {
-					return fmt.Errorf("扣除运营调账金额失败: %w", err)
-				}
+// executeAdjustmentInTx 执行调账资金划转（复用调用方事务）
+func (s *SettlementService) executeAdjustmentInTx(outerTx *gorm.DB, ctx context.Context, settlement *models.OrderSettlement) error {
+	// 1. 调整运营账户
+	if !settlement.OperatorShare.IsZero() {
+		if settlement.OperatorShare.GreaterThan(decimal.Zero) {
+			_, err := s.accountService.AddOperatorIncomeInTx(outerTx, ctx, settlement.OperatorID, settlement.OperatorShare, settlement.OrderSN,
+				fmt.Sprintf("虾皮调账补款-运营分成%s", settlement.OperatorShare.String()))
+			if err != nil {
+				return fmt.Errorf("增加运营调账收入失败: %w", err)
+			}
+		} else {
+			_, err := s.accountService.DeductOperatorBalanceInTx(outerTx, ctx, settlement.OperatorID, settlement.OperatorShare.Abs(), settlement.OrderSN,
+				fmt.Sprintf("虾皮调账扣款-运营分成%s", settlement.OperatorShare.Abs().String()))
+			if err != nil {
+				return fmt.Errorf("扣除运营调账金额失败: %w", err)
 			}
 		}
+	}
 
-		// 2. 调整店主佣金账户
-		if !settlement.ShopOwnerShare.IsZero() {
-			if settlement.ShopOwnerShare.GreaterThan(decimal.Zero) {
-				// 补款：增加店主佣金
-				_, err := s.accountService.AddShopOwnerCommission(ctx, settlement.ShopOwnerID, settlement.ShopOwnerShare, settlement.OrderSN,
-					fmt.Sprintf("虾皮调账补款-店主分成%s", settlement.ShopOwnerShare.String()))
-				if err != nil {
-					return fmt.Errorf("增加店主调账佣金失败: %w", err)
-				}
-			} else {
-				// 扣款：从店主佣金账户扣除
-				_, err := s.accountService.DeductShopOwnerCommission(ctx, settlement.ShopOwnerID, settlement.ShopOwnerShare.Abs(), settlement.OrderSN,
-					fmt.Sprintf("虾皮调账扣款-店主分成%s", settlement.ShopOwnerShare.Abs().String()))
-				if err != nil {
-					return fmt.Errorf("扣除店主调账佣金失败: %w", err)
-				}
+	// 2. 调整店主佣金账户
+	if !settlement.ShopOwnerShare.IsZero() {
+		if settlement.ShopOwnerShare.GreaterThan(decimal.Zero) {
+			_, err := s.accountService.AddShopOwnerCommissionInTx(outerTx, ctx, settlement.ShopOwnerID, settlement.ShopOwnerShare, settlement.OrderSN,
+				fmt.Sprintf("虾皮调账补款-店主分成%s", settlement.ShopOwnerShare.String()))
+			if err != nil {
+				return fmt.Errorf("增加店主调账佣金失败: %w", err)
+			}
+		} else {
+			_, err := s.accountService.DeductShopOwnerCommissionInTx(outerTx, ctx, settlement.ShopOwnerID, settlement.ShopOwnerShare.Abs(), settlement.OrderSN,
+				fmt.Sprintf("虾皮调账扣款-店主分成%s", settlement.ShopOwnerShare.Abs().String()))
+			if err != nil {
+				return fmt.Errorf("扣除店主调账佣金失败: %w", err)
 			}
 		}
+	}
 
-		// 3. 调整平台佣金账户
-		if !settlement.PlatformShare.IsZero() {
-			if settlement.PlatformShare.GreaterThan(decimal.Zero) {
-				// 补款：增加平台佣金
-				_, err := s.accountService.AddPlatformCommission(ctx, settlement.PlatformShare, settlement.OrderSN,
-					fmt.Sprintf("虾皮调账补款-平台分成%s", settlement.PlatformShare.String()))
-				if err != nil {
-					return fmt.Errorf("增加平台调账佣金失败: %w", err)
-				}
-			} else {
-				// 扣款：从平台佣金账户扣除
-				_, err := s.accountService.DeductPlatformCommission(ctx, settlement.PlatformShare.Abs(), settlement.OrderSN,
-					fmt.Sprintf("虾皮调账扣款-平台分成%s", settlement.PlatformShare.Abs().String()))
-				if err != nil {
-					return fmt.Errorf("扣除平台调账佣金失败: %w", err)
-				}
+	// 3. 调整平台佣金账户
+	if !settlement.PlatformShare.IsZero() {
+		if settlement.PlatformShare.GreaterThan(decimal.Zero) {
+			_, err := s.accountService.AddPlatformCommissionInTx(outerTx, ctx, settlement.PlatformShare, settlement.OrderSN,
+				fmt.Sprintf("虾皮调账补款-平台分成%s", settlement.PlatformShare.String()))
+			if err != nil {
+				return fmt.Errorf("增加平台调账佣金失败: %w", err)
+			}
+		} else {
+			_, err := s.accountService.DeductPlatformCommissionInTx(outerTx, ctx, settlement.PlatformShare.Abs(), settlement.OrderSN,
+				fmt.Sprintf("虾皮调账扣款-平台分成%s", settlement.PlatformShare.Abs().String()))
+			if err != nil {
+				return fmt.Errorf("扣除平台调账佣金失败: %w", err)
 			}
 		}
+	}
 
-		return nil
-	})
+	return nil
 }
 
 // GetPendingSettlements 获取待结算订单 - 遍历所有分表

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
 	<div class="orders-page">
 		<div class="page-header">
 			<h1 class="page-title">我的订单</h1>
@@ -122,15 +122,14 @@
 				</el-row>
 				<el-row :gutter="20" style="margin-top: 20px;">
 					<el-col :xs="24" :sm="8">
-						<el-form-item label="付款状态" label-class="spaced-label">
-							<el-select v-model="filterForm.paymentStatus" placeholder="请选择"
-								style="width: 35%">
-								<el-option label="全部" value="all" />
-								<el-option label="未付款" value="unpaid" />
-								<el-option label="已付款" value="paid" />
-								<el-option label="已退款" value="refunded" />
-							</el-select>
-						</el-form-item>
+					<el-form-item label="付款状态" label-class="spaced-label">
+						<el-select v-model="filterForm.paymentStatus" placeholder="请选择"
+							style="width: 35%">
+							<el-option label="全部" value="all" />
+							<el-option label="已付款" :value="PREPAYMENT_STATUS.SUFFICIENT" />
+							<el-option label="未付款" :value="PREPAYMENT_STATUS.INSUFFICIENT" />
+						</el-select>
+					</el-form-item>
 					</el-col>
 					<el-col :xs="24" :sm="8">
 						<el-form-item label="订单状态">
@@ -186,11 +185,11 @@
 					<!-- 订单头部 -->
 					<div class="order-header">
 						<div class="order-number">
-							订单编号: {{ order.orderNo }}
-							<el-tag v-if="order.paymentStatus" :type="getPaymentStatusType(order.paymentStatus)"
-								size="small" style="margin-left: 8px">
-								{{ getPaymentStatusText(order.paymentStatus) }}
-							</el-tag>
+						订单编号: {{ order.orderNo }}
+						<el-tag v-if="order.prepaymentStatus > 0" :type="PREPAYMENT_STATUS_TAG_TYPE[order.prepaymentStatus]"
+							size="small" style="margin-left: 8px">
+							{{ PREPAYMENT_STATUS_TEXT[order.prepaymentStatus] }}
+						</el-tag>
 						</div>
 						<div class="order-amount-info">
 							<span v-if="order.adjustmentLabel1">{{ order.adjustmentLabel1 }}</span>
@@ -263,7 +262,7 @@
 	import * as orderApi from '@share/api/order'
 	import type { Order as ApiOrder } from '@share/api/order'
 	import { shopeeApi } from '@share/api/shopee'
-	import { HTTP_STATUS } from '@share/constants'
+	import { HTTP_STATUS, PREPAYMENT_STATUS, PREPAYMENT_STATUS_TEXT, PREPAYMENT_STATUS_TAG_TYPE } from '@share/constants'
 
 	interface Product {
 		image : string
@@ -284,7 +283,7 @@
 		shopeeOrderNo ?: string
 		shopeeStatus ?: string
 		orderAmount : string
-		paymentStatus ?: string
+		prepaymentStatus : number
 		unsettledCommission ?: string
 		settledCommission ?: string
 		shopeeAmount ?: string
@@ -337,7 +336,7 @@
 		shopKeyword: '',
 		orderNo: '',
 		orderStatus: 'all',
-		paymentStatus: 'all',
+		paymentStatus: 'all' as string | number,
 		dateRange: getDefaultDateRange() as string[] | null,
 	})
 
@@ -388,14 +387,6 @@
 			subtotal: (parseFloat(item.item_price) * item.quantity).toFixed(2)
 		}))
 
-		// 根据订单状态判断付款状态
-		let paymentStatus = 'paid'
-		if (apiOrder.order_status === 'UNPAID') {
-			paymentStatus = 'unpaid'
-		} else if (apiOrder.order_status === 'CANCELLED' || apiOrder.order_status === 'IN_CANCEL') {
-			paymentStatus = 'refunded'
-		}
-
 		return {
 			orderNo: apiOrder.order_sn,
 			orderTime: formatDateTime(apiOrder.create_time || apiOrder.created_at),
@@ -404,7 +395,7 @@
 			shopeeOrderNo: apiOrder.order_sn,
 			shopeeStatus: statusMap[apiOrder.order_status] || apiOrder.order_status,
 			orderAmount: apiOrder.total_amount,
-			paymentStatus,
+			prepaymentStatus: apiOrder.prepayment_status ?? 0,
 			unsettledCommission: ['READY_TO_SHIP', 'PROCESSED', 'SHIPPED'].includes(apiOrder.order_status) ? '0.00' : '0.00',
 			settledCommission: apiOrder.order_status === 'COMPLETED' ? '0.00' : undefined,
 			shopeeAmount: apiOrder.total_amount,
@@ -463,9 +454,9 @@
 			result = []
 		}
 
-		// 根据筛选条件过滤（前端二次过滤，主要筛选已在API层处理）
-		if (filterForm.paymentStatus && filterForm.paymentStatus !== 'all') {
-			result = result.filter(order => order.paymentStatus === filterForm.paymentStatus)
+		// 按预付款状态过滤
+		if (filterForm.paymentStatus !== 'all') {
+			result = result.filter(order => order.prepaymentStatus === filterForm.paymentStatus)
 		}
 
 		return result
@@ -477,24 +468,6 @@
 			minimumFractionDigits: 2,
 			maximumFractionDigits: 2
 		})
-	}
-
-	const getPaymentStatusType = (status : string) : string => {
-		const statusMap : Record<string, string> = {
-			paid: 'success',
-			unpaid: 'warning',
-			refunded: 'info'
-		}
-		return statusMap[status] || 'info'
-	}
-
-	const getPaymentStatusText = (status : string) : string => {
-		const statusMap : Record<string, string> = {
-			paid: '已付款',
-			unpaid: '未付款',
-			refunded: '已退款'
-		}
-		return statusMap[status] || '未知'
 	}
 
 	const handleSearch = () => {
@@ -593,10 +566,12 @@
 				params.status = statusReverseMap[filterForm.orderStatus] || filterForm.orderStatus
 			}
 
-			// 日期范围
+			// 日期范围（结束日期补上当前时分秒，避免当天订单查不到）
 			if (filterForm.dateRange && filterForm.dateRange.length === 2) {
-				params.start_time = filterForm.dateRange[0]
-				params.end_time = filterForm.dateRange[1]
+				params.start_time = filterForm.dateRange[0] + ' 00:00:00'
+				const now = new Date()
+				const hms = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
+				params.end_time = filterForm.dateRange[1] + ' ' + hms
 			}
 
 			const res = await orderApi.getOrderList(params)

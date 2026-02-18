@@ -3,7 +3,7 @@ package shopower
 import (
 	"context"
 	"fmt"
-	"strconv"
+	"sort"
 	"time"
 
 	"balance/backend/internal/consts"
@@ -16,7 +16,16 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+// PrepaymentCheckFunc 预付款检查回调函数类型
+// 参数：shopID, orderSN, prepaymentAmount(预付款扣除金额), orderTable
+type PrepaymentCheckFunc func(ctx context.Context, shopID uint64, orderSN string, prepaymentAmount decimal.Decimal, orderTable string)
+
+// EscrowFetchFunc 获取订单结算明细的回调函数类型（由上层注入，避免循环依赖）
+// 返回值：escrow detail response, error
+type EscrowFetchFunc func(ctx context.Context, shopID uint64, orderSN string) (*shopee.EscrowDetailResponse, error)
 
 // OrderService 订单服务（店主专用）
 type OrderService struct {
@@ -25,6 +34,11 @@ type OrderService struct {
 	shardedDB   *database.ShardedDB
 	rs          *redsync.Redsync
 	idGenerator *utils.IDGenerator
+
+	// 预付款检查回调（由上层注入，避免循环依赖）
+	onPrepaymentCheck PrepaymentCheckFunc
+	// 结算明细获取回调（READY_TO_SHIP 时调用，获取费用明细用于预付款计算）
+	onEscrowFetch EscrowFetchFunc
 }
 
 // NewOrderService 创建订单服务
@@ -37,6 +51,16 @@ func NewOrderService() *OrderService {
 		rs:          database.GetRedsync(),
 		idGenerator: utils.NewIDGenerator(database.GetRedis()),
 	}
+}
+
+// SetPrepaymentCheckFunc 设置预付款检查回调（由上层在初始化时注入）
+func (s *OrderService) SetPrepaymentCheckFunc(fn PrepaymentCheckFunc) {
+	s.onPrepaymentCheck = fn
+}
+
+// SetEscrowFetchFunc 设置结算明细获取回调（由上层在初始化时注入）
+func (s *OrderService) SetEscrowFetchFunc(fn EscrowFetchFunc) {
+	s.onEscrowFetch = fn
 }
 
 // SyncOrders 同步订单（支持分时间段、分页、限流、重试）
@@ -71,13 +95,7 @@ func (s *OrderService) SyncOrdersWithShop(ctx context.Context, shop *models.Shop
 	return s.syncOrdersInternal(ctx, shop, timeFrom, timeTo)
 }
 
-// SyncOrdersWithShopNoLock 同步订单（不加锁，调用方已持有锁）
-// 此方法适用于调度器等已在外层加锁的场景
-func (s *OrderService) SyncOrdersWithShopNoLock(ctx context.Context, shop *models.Shop, timeFrom, timeTo time.Time) (int, error) {
-	return s.syncOrdersInternal(ctx, shop, timeFrom, timeTo)
-}
-
-// syncOrdersInternal 同步订单内部实现（不加锁）
+// syncOrdersInternal 同步订单内部实现（不加锁，供手动触发的全量同步使用）
 //
 // 同步流程分三层循环：
 //  1. 外层循环（本函数）：将大时间范围拆分成多个 ≤15天 的小段（Shopee API 限制）
@@ -86,47 +104,30 @@ func (s *OrderService) SyncOrdersWithShopNoLock(ctx context.Context, shop *model
 func (s *OrderService) syncOrdersInternal(ctx context.Context, shop *models.Shop, timeFrom, timeTo time.Time) (int, error) {
 	shopID := shop.ShopID
 
-	// [调试日志] 打印同步参数
-	fmt.Printf("[SyncDebug] 店铺=%d Region=%s timeFrom=%s timeTo=%s\n",
-		shopID, shop.Region, timeFrom.Format("2006-01-02 15:04:05"), timeTo.Format("2006-01-02 15:04:05"))
-
 	accessToken, err := s.getAccessToken(ctx, shopID)
 	if err != nil {
 		return 0, fmt.Errorf("获取访问令牌失败: %w", err)
 	}
-	fmt.Printf("[SyncDebug] 店铺=%d AccessToken=%s...(前20字符)\n", shopID, truncateStr(accessToken, 20))
 
-	// === 外层循环：分时间段同步 ===
-	// Shopee API 限制单次查询最多 15 天，所以需要将大时间范围拆分
-	// 例如：同步 60 天数据 -> 拆分为 4 段（Day1-15, Day16-30, Day31-45, Day46-60）
 	maxRange := int64(consts.ShopeeMaxTimeRange)
 	fromTs := timeFrom.Unix()
 	toTs := timeTo.Unix()
 	totalCount := 0
-	chunkIdx := 0
 
 	for fromTs < toTs {
-		endTs := fromTs + maxRange // 15天
+		endTs := fromTs + maxRange
 		if endTs > toTs {
 			endTs = toTs
 		}
-		chunkIdx++
-		fmt.Printf("[SyncDebug] 店铺=%d 时间段#%d: %s ~ %s (unix: %d ~ %d)\n",
-			shopID, chunkIdx,
-			time.Unix(fromTs, 0).Format("2006-01-02 15:04:05"),
-			time.Unix(endTs, 0).Format("2006-01-02 15:04:05"),
-			fromTs, endTs)
 
 		count, err := s.syncOrdersInRange(ctx, shopID, shop.Region, accessToken, fromTs, endTs, "")
 		if err != nil {
 			return totalCount, err
 		}
-		fmt.Printf("[SyncDebug] 店铺=%d 时间段#%d 获取到 %d 条订单\n", shopID, chunkIdx, count)
 		totalCount += count
 		fromTs = endTs
 	}
 
-	fmt.Printf("[SyncDebug] 店铺=%d 同步总计 %d 条订单, 共 %d 个时间段\n", shopID, totalCount, chunkIdx)
 	s.shopService.UpdateLastSyncTime(shopID)
 	return totalCount, nil
 }
@@ -138,20 +139,12 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 	cursor := ""
 	pageSize := consts.ShopeeOrderListPageSize
 	totalCount := 0
-	pageIdx := 0
 
-	fmt.Printf("[SyncDebug] syncOrdersInRange 店铺=%d region=%s host=%s timeFrom=%d timeTo=%d orderStatus=%q\n",
-		shopID, region, client.GetHost(), timeFrom, timeTo, orderStatus)
-
-	// === 中层循环：分页获取订单列表 ===
-	// Shopee API 单次最多返回 100 个订单号，通过 cursor 分页获取所有订单
-	// 例如：该时间段有 500 个订单 -> 分 5 页获取
 	for {
 		if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
 			return totalCount, fmt.Errorf("限流等待被取消: %w", err)
 		}
 
-		pageIdx++
 		var listResp *shopee.OrderListResponse
 		err := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
 			var err error
@@ -159,15 +152,10 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 			return err
 		})
 		if err != nil {
-			fmt.Printf("[SyncDebug] 店铺=%d 第%d页获取订单列表失败: %v\n", shopID, pageIdx, err)
 			return totalCount, fmt.Errorf("获取订单列表失败: %w", err)
 		}
 
-		fmt.Printf("[SyncDebug] 店铺=%d 第%d页: 返回 %d 条订单, more=%v, nextCursor=%q\n",
-			shopID, pageIdx, len(listResp.Response.OrderList), listResp.Response.More, listResp.Response.NextCursor)
-
 		if len(listResp.Response.OrderList) == 0 {
-			fmt.Printf("[SyncDebug] 店铺=%d 第%d页: 订单列表为空，结束分页\n", shopID, pageIdx)
 			break
 		}
 
@@ -202,7 +190,7 @@ func (s *OrderService) syncOrdersInRange(ctx context.Context, shopID uint64, reg
 			}
 
 			for _, detail := range detailResp.Response.OrderList {
-				if err := s.saveOrderFull(ctx, shopID, &detail); err != nil {
+				if err := s.UpsertOrder(ctx, shopID, region, &detail); err != nil {
 					fmt.Printf("保存订单失败 shop_id=%d order_sn=%s: %v\n", shopID, detail.OrderSN, err)
 					continue
 				}
@@ -233,261 +221,8 @@ func (s *OrderService) getAccessToken(ctx context.Context, shopID uint64) (strin
 	return auth.AccessToken, nil
 }
 
-func (s *OrderService) saveOrder(ctx context.Context, shopID uint64, detail *shopee.OrderDetail) error {
-	rdb := database.GetRedis()
-	orderTable := database.GetOrderTableName(shopID)
 
-	var existingOrder models.Order
-	if err := s.db.Table(orderTable).Select("id", "order_status", "status_locked").
-		Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).
-		First(&existingOrder).Error; err == nil {
-		// 状态锁定时只更新部分字段
-		if existingOrder.StatusLocked {
-			return s.saveOrderWithoutStatus(ctx, shopID, detail, existingOrder.ID)
-		}
 
-		// 状态优先级检查
-		currentPriority, currentExists := consts.OrderStatusPriority[existingOrder.OrderStatus]
-		newPriority, newExists := consts.OrderStatusPriority[detail.OrderStatus]
-		if currentExists && newExists && newPriority < currentPriority {
-			return s.saveOrderWithoutStatus(ctx, shopID, detail, existingOrder.ID)
-		}
-	}
-
-	// 检查更新时间缓存（使用Lua脚本保证原子性）
-	if detail.UpdateTime > 0 {
-		updateTimeKey := fmt.Sprintf(consts.KeyOrderUpdateTime, shopID, detail.OrderSN)
-		if !s.checkAndSetUpdateTime(ctx, rdb, updateTimeKey, detail.UpdateTime) {
-			return nil
-		}
-	}
-
-	return s.saveOrderFull(ctx, shopID, detail)
-}
-
-// saveOrderFull 完整保存订单（包含商品和地址）- 使用分表
-func (s *OrderService) saveOrderFull(ctx context.Context, shopID uint64, detail *shopee.OrderDetail) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		var createTime, updateTime, payTime, shipByDate *time.Time
-		if detail.CreateTime > 0 {
-			t := time.Unix(detail.CreateTime, 0)
-			createTime = &t
-		}
-		if detail.UpdateTime > 0 {
-			t := time.Unix(detail.UpdateTime, 0)
-			updateTime = &t
-		}
-		if detail.PayTime > 0 {
-			t := time.Unix(detail.PayTime, 0)
-			payTime = &t
-		}
-		if detail.ShipByDate > 0 {
-			t := time.Unix(detail.ShipByDate, 0)
-			shipByDate = &t
-		}
-
-		// 使用分表
-		orderTable := database.GetOrderTableName(shopID)
-		orderItemTable := database.GetOrderItemTableName(shopID)
-		orderAddressTable := database.GetOrderAddressTableName(shopID)
-
-		// 查询是否已存在
-		var existingOrder models.Order
-		isNew := tx.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).
-			First(&existingOrder).Error != nil
-
-		order := models.Order{
-			ShopID:          shopID,
-			OrderSN:         detail.OrderSN,
-			Region:          detail.Region,
-			OrderStatus:     detail.OrderStatus,
-			BuyerUserID:     uint64(detail.BuyerUserID),
-			BuyerUsername:   detail.BuyerUsername,
-			TotalAmount:     decimal.NewFromFloat(detail.TotalAmount),
-			Currency:        detail.Currency,
-			ShippingCarrier: detail.ShippingCarrier,
-			TrackingNumber:  detail.TrackingNo,
-			ShipByDate:      shipByDate,
-			PayTime:         payTime,
-			CreateTime:      createTime,
-			UpdateTime:      updateTime,
-		}
-
-		if isNew {
-			// 新订单：生成ID后插入
-			orderID, err := s.idGenerator.GenerateOrderID(ctx)
-			if err != nil {
-				return fmt.Errorf("生成订单ID失败: %w", err)
-			}
-			order.ID = uint64(orderID)
-			if err := tx.Table(orderTable).Create(&order).Error; err != nil {
-				return err
-			}
-		} else {
-			// 已存在：更新
-			order.ID = existingOrder.ID
-			if err := tx.Table(orderTable).Where("id = ?", existingOrder.ID).Save(&order).Error; err != nil {
-				return err
-			}
-		}
-
-		// 更新订单商品（先删除旧数据，再插入新数据）
-		if err := tx.Table(orderItemTable).Where("order_id = ?", order.ID).Delete(&models.OrderItem{}).Error; err != nil {
-			return err
-		}
-		for _, item := range detail.ItemList {
-			itemID, err := s.idGenerator.GenerateOrderItemID(ctx)
-			if err != nil {
-				return fmt.Errorf("生成订单商品ID失败: %w", err)
-			}
-			orderItem := models.OrderItem{
-				ID:        uint64(itemID),
-				OrderID:   order.ID,
-				ShopID:    shopID,
-				OrderSN:   detail.OrderSN,
-				ItemID:    uint64(item.ItemID),
-				ItemName:  item.ItemName,
-				ItemSKU:   item.ItemSKU,
-				ModelID:   uint64(item.ModelID),
-				ModelName: item.ModelName,
-				ModelSKU:  item.ModelSKU,
-				Quantity:  item.ModelQuantity,
-				ItemPrice: decimal.NewFromFloat(item.ModelOriginalPrice),
-			}
-			if err := tx.Table(orderItemTable).Create(&orderItem).Error; err != nil {
-				return err
-			}
-		}
-
-		// 更新订单地址（先删除旧数据，再插入新数据）
-		if err := tx.Table(orderAddressTable).Where("order_id = ?", order.ID).Delete(&models.OrderAddress{}).Error; err != nil {
-			return err
-		}
-		addrID, err := s.idGenerator.GenerateOrderAddressID(ctx)
-		if err != nil {
-			return fmt.Errorf("生成订单地址ID失败: %w", err)
-		}
-		addr := detail.RecipientAddress
-		orderAddress := models.OrderAddress{
-			ID:          uint64(addrID),
-			OrderID:     order.ID,
-			ShopID:      shopID,
-			OrderSN:     detail.OrderSN,
-			Name:        addr.Name,
-			Phone:       addr.Phone,
-			Town:        addr.Town,
-			District:    addr.District,
-			City:        addr.City,
-			State:       addr.State,
-			Region:      addr.Region,
-			Zipcode:     addr.Zipcode,
-			FullAddress: addr.FullAddress,
-		}
-		if err := tx.Table(orderAddressTable).Create(&orderAddress).Error; err != nil {
-			return err
-		}
-
-		// 缓存订单状态
-		rdb := database.GetRedis()
-		statusKey := fmt.Sprintf(consts.KeyOrderStatus, shopID, detail.OrderSN)
-		rdb.Set(ctx, statusKey, detail.OrderStatus, consts.OrderStatusExpire)
-
-		return nil
-	})
-}
-
-// saveOrderWithoutStatus 保存订单但不更新状态 - 使用分表
-func (s *OrderService) saveOrderWithoutStatus(ctx context.Context, shopID uint64, detail *shopee.OrderDetail, orderID uint64) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		var updateTime, shipByDate *time.Time
-		if detail.UpdateTime > 0 {
-			t := time.Unix(detail.UpdateTime, 0)
-			updateTime = &t
-		}
-		if detail.ShipByDate > 0 {
-			t := time.Unix(detail.ShipByDate, 0)
-			shipByDate = &t
-		}
-
-		// 使用分表
-		orderTable := database.GetOrderTableName(shopID)
-		orderItemTable := database.GetOrderItemTableName(shopID)
-		orderAddressTable := database.GetOrderAddressTableName(shopID)
-
-		updates := map[string]interface{}{
-			"shipping_carrier": detail.ShippingCarrier,
-			"tracking_number":  detail.TrackingNo,
-			"ship_by_date":     shipByDate,
-			"update_time":      updateTime,
-		}
-		if err := tx.Table(orderTable).Where("id = ?", orderID).Updates(updates).Error; err != nil {
-			return err
-		}
-
-		// 更新订单商品
-		if err := tx.Table(orderItemTable).Where("order_id = ?", orderID).Delete(&models.OrderItem{}).Error; err != nil {
-			return err
-		}
-		for _, item := range detail.ItemList {
-			itemID, err := s.idGenerator.GenerateOrderItemID(ctx)
-			if err != nil {
-				return fmt.Errorf("生成订单商品ID失败: %w", err)
-			}
-			orderItem := models.OrderItem{
-				ID:        uint64(itemID),
-				OrderID:   orderID,
-				ShopID:    shopID,
-				OrderSN:   detail.OrderSN,
-				ItemID:    uint64(item.ItemID),
-				ItemName:  item.ItemName,
-				ItemSKU:   item.ItemSKU,
-				ModelID:   uint64(item.ModelID),
-				ModelName: item.ModelName,
-				ModelSKU:  item.ModelSKU,
-				Quantity:  item.ModelQuantity,
-				ItemPrice: decimal.NewFromFloat(item.ModelOriginalPrice),
-			}
-			if err := tx.Table(orderItemTable).Create(&orderItem).Error; err != nil {
-				return err
-			}
-		}
-
-		// 更新订单地址
-		if err := tx.Table(orderAddressTable).Where("order_id = ?", orderID).Delete(&models.OrderAddress{}).Error; err != nil {
-			return err
-		}
-		addrID, err := s.idGenerator.GenerateOrderAddressID(ctx)
-		if err != nil {
-			return fmt.Errorf("生成订单地址ID失败: %w", err)
-		}
-		addr := detail.RecipientAddress
-		orderAddress := models.OrderAddress{
-			ID:          uint64(addrID),
-			OrderID:     orderID,
-			ShopID:      shopID,
-			OrderSN:     detail.OrderSN,
-			Name:        addr.Name,
-			Phone:       addr.Phone,
-			Town:        addr.Town,
-			District:    addr.District,
-			City:        addr.City,
-			State:       addr.State,
-			Region:      addr.Region,
-			Zipcode:     addr.Zipcode,
-			FullAddress: addr.FullAddress,
-		}
-		if err := tx.Table(orderAddressTable).Create(&orderAddress).Error; err != nil {
-			return err
-		}
-
-		return nil
-	})
-}
-
-// SaveOrderFromWebhook 从Webhook保存订单
-func (s *OrderService) SaveOrderFromWebhook(ctx context.Context, shopID uint64, detail *shopee.OrderDetail) error {
-	return s.saveOrder(ctx, shopID, detail)
-}
 
 // ListOrders 获取订单列表 - 使用分表
 func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int64, status, startTime, endTime string, page, pageSize int) ([]models.Order, int64, error) {
@@ -522,9 +257,7 @@ func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int
 			return nil, 0, err
 		}
 
-		for i := range orders {
-			s.fillOrderLabels(&orders[i])
-		}
+		s.batchFillOrderLabels(orders)
 		return orders, total, nil
 	}
 
@@ -562,15 +295,10 @@ func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int
 		allOrders = append(allOrders, orders...)
 	}
 
-	// 内存排序和分页
-	// 按ID降序排序
-	for i := 0; i < len(allOrders)-1; i++ {
-		for j := i + 1; j < len(allOrders); j++ {
-			if allOrders[i].ID < allOrders[j].ID {
-				allOrders[i], allOrders[j] = allOrders[j], allOrders[i]
-			}
-		}
-	}
+	// 内存排序和分页（按ID降序排序）
+	sort.Slice(allOrders, func(i, j int) bool {
+		return allOrders[i].ID > allOrders[j].ID
+	})
 
 	// 分页
 	offset := (page - 1) * pageSize
@@ -583,36 +311,111 @@ func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int
 	}
 	result := allOrders[offset:end]
 
-	for i := range result {
-		s.fillOrderLabels(&result[i])
-	}
+	s.batchFillOrderLabels(result)
 
 	return result, total, nil
 }
 
-// fillOrderLabels 填充订单显示标签
+// batchFillOrderLabels 批量填充订单显示标签（解决 N+1 查询问题）
+// 将同一分表的订单分组后用 IN 查询一次拿到所有 escrow 数据，避免每个订单查一次
+func (s *OrderService) batchFillOrderLabels(orders []models.Order) {
+	if len(orders) == 0 {
+		return
+	}
+
+	// 按 escrow 分表索引分组
+	shardOrders := make(map[int][]string) // shardIdx → []orderSN
+	shardShopID := make(map[int]uint64)   // shardIdx → 任一 shopID（用于表名）
+	for _, o := range orders {
+		idx := database.GetShardIndex(o.ShopID)
+		shardOrders[idx] = append(shardOrders[idx], o.OrderSN)
+		shardShopID[idx] = o.ShopID
+	}
+
+	// 批量查询每个分表的 escrow 数据
+	escrowMap := make(map[string]models.OrderEscrow) // key = "shopID:orderSN"
+	for idx, orderSNs := range shardOrders {
+		escrowTable := database.GetOrderEscrowTableName(shardShopID[idx])
+		var escrows []models.OrderEscrow
+		s.db.Table(escrowTable).Where("order_sn IN ?", orderSNs).Find(&escrows)
+		for _, e := range escrows {
+			key := fmt.Sprintf("%d:%s", e.ShopID, e.OrderSN)
+			escrowMap[key] = e
+		}
+	}
+
+	// 填充每个订单的标签
+	for i := range orders {
+		key := fmt.Sprintf("%d:%s", orders[i].ShopID, orders[i].OrderSN)
+		if escrow, ok := escrowMap[key]; ok {
+			s.fillOrderLabelsWithEscrow(&orders[i], &escrow)
+		} else {
+			s.fillOrderLabelsWithEscrow(&orders[i], nil)
+		}
+	}
+}
+
+// fillOrderLabels 填充订单显示标签（单条查询版本，供 GetOrder 等单条场景使用）
 func (s *OrderService) fillOrderLabels(order *models.Order) {
+	escrowTable := database.GetOrderEscrowTableName(order.ShopID)
+	var escrow models.OrderEscrow
+	if err := s.db.Table(escrowTable).
+		Where("shop_id = ? AND order_sn = ?", order.ShopID, order.OrderSN).
+		First(&escrow).Error; err == nil {
+		s.fillOrderLabelsWithEscrow(order, &escrow)
+	} else {
+		s.fillOrderLabelsWithEscrow(order, nil)
+	}
+}
+
+// fillOrderLabelsWithEscrow 填充订单显示标签（核心逻辑，escrow 可为 nil）
+//
+// Label 含义：
+//   - AdjustmentLabel1: 佣金信息（头部右上角）
+//   - AdjustmentLabel2: 订单金额/账款调整（头部右上角）
+//   - AdjustmentLabel3: 虾皮订单金额/账款调整（商品列表下方）
+func (s *OrderService) fillOrderLabelsWithEscrow(order *models.Order, escrow *models.OrderEscrow) {
 	currency := order.Currency
 	if currency == "" {
 		currency = "NT$"
 	}
 	amount := order.TotalAmount.StringFixed(2)
+	hasEscrow := escrow != nil
 
-	// 根据订单状态设置不同的显示标签
 	switch order.OrderStatus {
-	case "COMPLETED":
-		// 已结算订单
-		order.AdjustmentLabel1 = fmt.Sprintf("已结算佣金：%s0.00", currency)
-		order.AdjustmentLabel2 = fmt.Sprintf("订单金额：%s%s", currency, amount)
-		order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单金额：%s%s", currency, amount)
-	case "CANCELLED", "IN_CANCEL":
-		// 账款调整订单
-		order.AdjustmentLabel1 = fmt.Sprintf("账款调整佣金：%s0.00", currency)
-		order.AdjustmentLabel2 = fmt.Sprintf("订单账款调整：%s%s", currency, amount)
-		order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单账款调整：%s%s", currency, amount)
+	case consts.OrderStatusCompleted:
+		if hasEscrow {
+			commission := escrow.CommissionFee.Add(escrow.ServiceFee).Abs()
+			escrowAmt := escrow.EscrowAmount
+			order.AdjustmentLabel1 = fmt.Sprintf("已结算佣金：%s%s", currency, commission.StringFixed(2))
+			order.AdjustmentLabel2 = fmt.Sprintf("订单金额：%s%s", currency, amount)
+			order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单结算：%s%s", currency, escrowAmt.StringFixed(2))
+		} else {
+			order.AdjustmentLabel1 = fmt.Sprintf("已结算佣金：%s--", currency)
+			order.AdjustmentLabel2 = fmt.Sprintf("订单金额：%s%s", currency, amount)
+			order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单金额：%s%s", currency, amount)
+		}
+
+	case consts.OrderStatusCancelled, consts.OrderStatusInCancel:
+		if hasEscrow {
+			adjustTotal := escrow.SellerReturnRefund.Add(escrow.DrcAdjustableRefund).Add(escrow.ReverseShippingFee)
+			commission := escrow.CommissionFee.Add(escrow.ServiceFee).Abs()
+			escrowAmt := escrow.EscrowAmount
+			order.AdjustmentLabel1 = fmt.Sprintf("账款调整佣金：%s%s", currency, commission.StringFixed(2))
+			if adjustTotal.IsZero() {
+				order.AdjustmentLabel2 = fmt.Sprintf("订单账款调整：%s%s", currency, amount)
+			} else {
+				order.AdjustmentLabel2 = fmt.Sprintf("订单账款调整：%s%s", currency, adjustTotal.Abs().StringFixed(2))
+			}
+			order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单账款调整：%s%s", currency, escrowAmt.StringFixed(2))
+		} else {
+			order.AdjustmentLabel1 = fmt.Sprintf("账款调整佣金：%s0.00", currency)
+			order.AdjustmentLabel2 = fmt.Sprintf("订单账款调整：%s%s", currency, amount)
+			order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单账款调整：%s%s", currency, amount)
+		}
+
 	default:
-		// 未结算订单（待发货、已发货等）
-		order.AdjustmentLabel1 = fmt.Sprintf("未结算佣金：%s0.00", currency)
+		order.AdjustmentLabel1 = fmt.Sprintf("未结算佣金：%s--", currency)
 		order.AdjustmentLabel2 = fmt.Sprintf("订单金额：%s%s", currency, amount)
 		order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单金额：%s%s", currency, amount)
 	}
@@ -654,7 +457,7 @@ func (s *OrderService) RefreshOrder(ctx context.Context, adminID int64, shopID i
 	}
 
 	detail := &orderDetailsResp.Response.OrderList[0]
-	if err := s.saveOrder(ctx, uint64(shopID), detail); err != nil {
+	if err := s.UpsertOrder(ctx, uint64(shopID), shop.Region, detail); err != nil {
 		return nil, err
 	}
 
@@ -766,44 +569,387 @@ func (s *OrderService) RefreshOrderFromAPI(ctx context.Context, shopID uint64, o
 		return utils.ErrOrderNotFound
 	}
 
-	return s.saveOrder(ctx, shopID, &detailResp.Response.OrderList[0])
+	return s.UpsertOrder(ctx, shopID, shop.Region, &detailResp.Response.OrderList[0])
 }
 
-// checkAndSetUpdateTimeLua Lua脚本：原子性地检查并设置更新时间
-const checkAndSetUpdateTimeLua = `
-	local oldTime = redis.call('GET', KEYS[1])
-	if oldTime then
-		if tonumber(ARGV[1]) <= tonumber(oldTime) then
-			return 0
-		end
-	end
-	redis.call('SETEX', KEYS[1], ARGV[2], ARGV[1])
-	return 1
-`
 
-// checkAndSetUpdateTime 原子性地检查并设置更新时间
-func (s *OrderService) checkAndSetUpdateTime(ctx context.Context, rdb *redis.Client, key string, newTime int64) bool {
-	script := redis.NewScript(checkAndSetUpdateTimeLua)
-	result, err := script.Run(ctx, rdb, []string{key}, newTime, int(consts.OrderUpdateTimeTTL.Seconds())).Int()
-	if err != nil {
-		// 降级：使用非原子操作
-		cachedTime, err := rdb.Get(ctx, key).Result()
-		if err == nil {
-			oldTime, _ := strconv.ParseInt(cachedTime, 10, 64)
-			if newTime <= oldTime {
-				return false
+// ==================== 统一订单写入入口 ====================
+
+// UpsertOrder 统一的订单写入入口（Webhook 和 Patrol 巡检共用）
+//
+// 并发安全：
+//   - 事务内使用 SELECT ... FOR UPDATE 对已有订单行加行锁，串行化并发写入
+//   - 新订单插入依赖 (shop_id, order_sn) 唯一索引兜底，重复插入会被数据库拒绝
+//   - 状态回退由 OrderStatusPriority 拦截，StatusLocked 由店主手动锁定
+//   - READY_TO_SHIP 预付款检查在事务提交后异步触发，CheckAndDeductForOrder 自带行锁幂等
+//
+// 返回 nil 表示写入成功（含 "无需更新" 的情况）
+func (s *OrderService) UpsertOrder(ctx context.Context, shopID uint64, region string, detail *shopee.OrderDetail) error {
+	orderTable := database.GetOrderTableName(shopID)
+	orderItemTable := database.GetOrderItemTableName(shopID)
+	orderAddressTable := database.GetOrderAddressTableName(shopID)
+	totalAmount := decimal.NewFromFloat(detail.TotalAmount)
+
+	// 解析 Shopee 时间戳为 Go time 指针
+	var createTime, updateTime, payTime, shipByDate *time.Time
+	if detail.CreateTime > 0 {
+		t := time.Unix(detail.CreateTime, 0)
+		createTime = &t
+	}
+	if detail.UpdateTime > 0 {
+		t := time.Unix(detail.UpdateTime, 0)
+		updateTime = &t
+	}
+	if detail.PayTime > 0 {
+		t := time.Unix(detail.PayTime, 0)
+		payTime = &t
+	}
+	if detail.ShipByDate > 0 {
+		t := time.Unix(detail.ShipByDate, 0)
+		shipByDate = &t
+	}
+
+	// 仅更新非状态字段的通用 map（StatusLocked 或状态优先级低时使用）
+	partialUpdates := map[string]interface{}{
+		"shipping_carrier": detail.ShippingCarrier,
+		"tracking_number":  detail.TrackingNo,
+		"ship_by_date":     shipByDate,
+		"update_time":      updateTime,
+	}
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// 尝试用 FOR UPDATE 锁住已有的订单行
+		// 如果订单不存在，First 返回 ErrRecordNotFound，不会加锁
+		// 如果订单存在，行锁保证并发的 Webhook 和 Patrol 串行执行后续逻辑
+		var existing models.Order
+		found := tx.Table(orderTable).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).
+			First(&existing).Error == nil
+
+		// 构造完整的订单对象
+		order := models.Order{
+			ShopID:          shopID,
+			OrderSN:         detail.OrderSN,
+			Region:          region,
+			OrderStatus:     detail.OrderStatus,
+			BuyerUserID:     uint64(detail.BuyerUserID),
+			BuyerUsername:   detail.BuyerUsername,
+			TotalAmount:     totalAmount,
+			Currency:        detail.Currency,
+			ShippingCarrier: detail.ShippingCarrier,
+			TrackingNumber:  detail.TrackingNo,
+			ShipByDate:      shipByDate,
+			PayTime:         payTime,
+			CreateTime:      createTime,
+			UpdateTime:      updateTime,
+		}
+
+		if !found {
+			// 新订单：生成分布式 ID 后插入
+			// 并发场景下若两个协程同时走到这里，唯一索引 (shop_id, order_sn) 会让第二个 Create 失败
+			orderID, err := s.idGenerator.GenerateOrderID(ctx)
+			if err != nil {
+				return fmt.Errorf("生成订单ID失败: %w", err)
+			}
+			order.ID = uint64(orderID)
+			if err := tx.Table(orderTable).Create(&order).Error; err != nil {
+				return err
+			}
+		} else {
+			// 已存在：状态锁定 → 仅更新物流等非状态字段
+			if existing.StatusLocked {
+				return tx.Table(orderTable).Where("id = ?", existing.ID).Updates(partialUpdates).Error
+			}
+			// 状态优先级检查：不允许回退（如 COMPLETED → SHIPPED 被拦截）
+			currentP, cOK := consts.OrderStatusPriority[existing.OrderStatus]
+			newP, nOK := consts.OrderStatusPriority[detail.OrderStatus]
+			if cOK && nOK && newP < currentP {
+				return tx.Table(orderTable).Where("id = ?", existing.ID).Updates(partialUpdates).Error
+			}
+			// 状态允许推进 → 全量更新
+			order.ID = existing.ID
+			if err := tx.Table(orderTable).Where("id = ?", existing.ID).Save(&order).Error; err != nil {
+				return err
 			}
 		}
-		rdb.Set(ctx, key, newTime, consts.OrderUpdateTimeTTL)
-		return true
+
+		// 写入/更新商品（先删后插，保证与 Shopee 一致）
+		tx.Table(orderItemTable).Where("order_id = ?", order.ID).Delete(&models.OrderItem{})
+		for _, item := range detail.ItemList {
+			itemID, err := s.idGenerator.GenerateOrderItemID(ctx)
+			if err != nil {
+				return fmt.Errorf("生成订单商品ID失败: %w", err)
+			}
+			orderItem := models.OrderItem{
+				ID:        uint64(itemID),
+				OrderID:   order.ID,
+				ShopID:    shopID,
+				OrderSN:   detail.OrderSN,
+				ItemID:    uint64(item.ItemID),
+				ItemName:  item.ItemName,
+				ItemSKU:   item.ItemSKU,
+				ModelID:   uint64(item.ModelID),
+				ModelName: item.ModelName,
+				ModelSKU:  item.ModelSKU,
+				Quantity:  item.ModelQuantity,
+				ItemPrice: decimal.NewFromFloat(item.ModelOriginalPrice),
+			}
+			if err := tx.Table(orderItemTable).Create(&orderItem).Error; err != nil {
+				return err
+			}
+		}
+
+		// 写入/更新地址（先删后插）
+		tx.Table(orderAddressTable).Where("order_id = ?", order.ID).Delete(&models.OrderAddress{})
+		addrID, err := s.idGenerator.GenerateOrderAddressID(ctx)
+		if err != nil {
+			return fmt.Errorf("生成订单地址ID失败: %w", err)
+		}
+		addr := detail.RecipientAddress
+		orderAddress := models.OrderAddress{
+			ID:          uint64(addrID),
+			OrderID:     order.ID,
+			ShopID:      shopID,
+			OrderSN:     detail.OrderSN,
+			Name:        addr.Name,
+			Phone:       addr.Phone,
+			Town:        addr.Town,
+			District:    addr.District,
+			City:        addr.City,
+			State:       addr.State,
+			Region:      addr.Region,
+			Zipcode:     addr.Zipcode,
+			FullAddress: addr.FullAddress,
+		}
+		return tx.Table(orderAddressTable).Create(&orderAddress).Error
+	})
+
+	if err != nil {
+		return err
 	}
-	return result == 1
+
+	// 事务提交成功后，READY_TO_SHIP 触发：
+	//   1. 调 get_escrow_detail 获取费用明细并写入订单
+	//   2. 用 escrow_amount 作为预付款扣除金额（而非 total_amount）
+	if detail.OrderStatus == consts.OrderStatusReadyToShip {
+		prepaymentAmount := totalAmount // 兜底：如果获取不到 escrow_detail，使用 total_amount
+
+		// 尝试获取 Shopee 结算明细（READY_TO_SHIP 时已可获取预估值）
+		if s.onEscrowFetch != nil {
+			escrowResp, err := s.onEscrowFetch(ctx, shopID, detail.OrderSN)
+			if err == nil && escrowResp != nil {
+				income := escrowResp.Response.OrderIncome
+				escrowAmount := decimal.NewFromFloat(income.EscrowAmount)
+
+				// 将费用明细写入订单表
+				feeUpdates := map[string]interface{}{
+					"escrow_amount_snapshot":       escrowAmount,
+					"buyer_paid_shipping_fee":      decimal.NewFromFloat(income.BuyerPaidShippingFee),
+					"original_cost_of_goods_sold":  decimal.NewFromFloat(income.OriginalCostOfGoodsSold),
+					"commission_fee":               decimal.NewFromFloat(income.CommissionFee),
+					"seller_transaction_fee":       decimal.NewFromFloat(income.SellerTransactionFee),
+					"credit_card_transaction_fee":  decimal.NewFromFloat(income.CreditCardTransactionFee),
+					"service_fee":                  decimal.NewFromFloat(income.ServiceFee),
+					"prepayment_amount":            escrowAmount, // 预付款扣除金额 = escrow_amount
+				}
+				if err := s.db.Table(orderTable).
+					Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).
+					Updates(feeUpdates).Error; err != nil {
+					fmt.Printf("[UpsertOrder] 店铺=%d 订单=%s 写入escrow费用明细失败: %v\n", shopID, detail.OrderSN, err)
+				} else {
+					prepaymentAmount = escrowAmount // 使用 escrow_amount 作为预付款金额
+				}
+			} else if err != nil {
+				fmt.Printf("[UpsertOrder] 店铺=%d 订单=%s 获取escrow明细失败(降级用total_amount): %v\n", shopID, detail.OrderSN, err)
+				// 降级：将 total_amount 写入 prepayment_amount
+				s.db.Table(orderTable).
+					Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).
+					Update("prepayment_amount", totalAmount)
+			}
+		}
+
+		// 触发预付款检查
+		if s.onPrepaymentCheck != nil {
+			s.onPrepaymentCheck(ctx, shopID, detail.OrderSN, prepaymentAmount, orderTable)
+		}
+	}
+
+	return nil
 }
 
-// truncateStr 截断字符串用于日志输出
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+// ==================== Sync 巡检模式 ====================
+
+// PatrolOrders 巡检订单（轻量比对模式，只对遗漏/不一致的订单拉详情写入）
+// 返回值：found = Shopee 侧订单总数, patched = 实际补录写入的订单数
+func (s *OrderService) PatrolOrders(ctx context.Context, shop *models.Shop, timeFrom, timeTo time.Time) (found int, patched int, err error) {
+	shopID := shop.ShopID
+	region := shop.Region
+
+	// 获取当前有效的 access_token（过期则自动刷新）
+	accessToken, err := s.getAccessToken(ctx, shopID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("获取访问令牌失败: %w", err)
 	}
-	return s[:maxLen]
+
+	// Shopee API 单次查询最多覆盖 15 天，超过则拆分为多个时间段依次巡检
+	maxRange := int64(consts.ShopeeMaxTimeRange)
+	fromTs := timeFrom.Unix()
+	toTs := timeTo.Unix()
+
+	// 按 15 天为一段，循环处理每段时间范围
+	for fromTs < toTs {
+		// 计算本段结束时间，不超过总截止时间
+		endTs := fromTs + maxRange
+		if endTs > toTs {
+			endTs = toTs
+		}
+
+		// 执行单段巡检，累加 found 和 patched 计数
+		f, p, segErr := s.patrolOrdersInRange(ctx, shopID, region, accessToken, fromTs, endTs)
+		found += f
+		patched += p
+		// 任何一段出错则提前返回，已累加的计数仍然返回
+		if segErr != nil {
+			return found, patched, segErr
+		}
+		// 推进到下一段
+		fromTs = endTs
+	}
+
+	// 全部段完成后，更新 shops 表的 last_sync_at，下次巡检从此时间开始
+	s.shopService.UpdateLastSyncTime(shopID)
+	return found, patched, nil
 }
+
+// patrolOrdersInRange 在单个时间段内巡检订单（分页拉取 → 比对 → 补录）
+func (s *OrderService) patrolOrdersInRange(ctx context.Context, shopID uint64, region, accessToken string, timeFrom, timeTo int64) (found int, patched int, err error) {
+	// 创建 Shopee API 客户端（根据 region 选择对应的 API Host）
+	client := shopee.NewClient(region)
+	// 游标分页：初始为空字符串，后续使用 Shopee 返回的 next_cursor
+	cursor := ""
+	// 每页最多拉取 100 条订单号（Shopee API 上限）
+	pageSize := consts.ShopeeOrderListPageSize
+
+	// 分页循环：持续拉取直到 Shopee 返回 more=false 或列表为空
+	for {
+		// 调用前等待限流令牌，防止触发 Shopee API 频率限制
+		if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
+			return found, patched, fmt.Errorf("限流等待被取消: %w", err)
+		}
+
+		// 调用 Shopee GetOrderList，获取本页的订单号 + 订单状态（轻量接口，不含详情）
+		var listResp *shopee.OrderListResponse
+		apiErr := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
+			var err error
+			listResp, err = client.GetOrderList(accessToken, shopID, "create_time", timeFrom, timeTo, pageSize, cursor, "")
+			return err
+		})
+		if apiErr != nil {
+			return found, patched, fmt.Errorf("获取订单列表失败: %w", apiErr)
+		}
+
+		// 本页无数据，结束分页
+		if len(listResp.Response.OrderList) == 0 {
+			break
+		}
+
+		// 将 Shopee 返回的订单号和状态收集到结构体切片中
+		type shopeeOrder struct {
+			OrderSN string
+			Status  string
+		}
+		var shopeeOrders []shopeeOrder
+		for _, o := range listResp.Response.OrderList {
+			shopeeOrders = append(shopeeOrders, shopeeOrder{OrderSN: o.OrderSN, Status: o.OrderStatus})
+		}
+		// 累加 Shopee 侧订单总数
+		found += len(shopeeOrders)
+
+		// 提取本页所有订单号，用于批量查询 DB
+		orderSNs := make([]string, len(shopeeOrders))
+		for i, o := range shopeeOrders {
+			orderSNs[i] = o.OrderSN
+		}
+
+		// 根据 shopID 定位分表，批量查出 DB 中已有的订单号和状态
+		orderTable := database.GetOrderTableName(shopID)
+		var dbOrders []models.Order
+		s.db.Table(orderTable).
+			Select("order_sn", "order_status").
+			Where("shop_id = ? AND order_sn IN ?", shopID, orderSNs).
+			Find(&dbOrders)
+
+		// 构建 DB 订单状态 map：order_sn → order_status，用于快速比对
+		dbMap := make(map[string]string, len(dbOrders))
+		for _, o := range dbOrders {
+			dbMap[o.OrderSN] = o.OrderStatus
+		}
+
+		// 逐条比对 Shopee 和 DB，筛出需要补录的订单号
+		var needPatch []string
+		for _, so := range shopeeOrders {
+			dbStatus, exists := dbMap[so.OrderSN]
+			if !exists {
+				// 情况 1：DB 中不存在该订单（Webhook 遗漏），需要新建
+				needPatch = append(needPatch, so.OrderSN)
+			} else if dbStatus != so.Status {
+				// 情况 2：DB 中的状态落后于 Shopee（如 Webhook 丢失状态更新），需要更新
+				// UpsertOrder 内部有状态优先级判断，不会回退到更低状态
+				needPatch = append(needPatch, so.OrderSN)
+			}
+		}
+
+		// 如果有需要补录的订单，分批拉取详情并写入 DB
+		if len(needPatch) > 0 {
+			fmt.Printf("[Patrol] 店铺=%d 发现 %d 条遗漏/不一致订单，补录中...\n", shopID, len(needPatch))
+
+			// 每批最多 50 条（Shopee GetOrderDetail API 上限）
+			for i := 0; i < len(needPatch); i += consts.ShopeeOrderDetailMaxSize {
+				// 计算本批的结束下标
+				end := i + consts.ShopeeOrderDetailMaxSize
+				if end > len(needPatch) {
+					end = len(needPatch)
+				}
+				// 截取本批订单号
+				batch := needPatch[i:end]
+
+				// 每批请求前等待限流令牌
+				if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
+					return found, patched, fmt.Errorf("限流等待被取消: %w", err)
+				}
+
+				// 调用 Shopee GetOrderDetail 获取完整订单信息（含商品、地址、金额等）
+				var detailResp *shopee.OrderDetailResponse
+				apiErr := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
+					var err error
+					detailResp, err = client.GetOrderDetail(accessToken, shopID, batch)
+					return err
+				})
+				if apiErr != nil {
+					return found, patched, fmt.Errorf("获取订单详情失败: %w", apiErr)
+				}
+
+				// 逐条调用 UpsertOrder 写入 DB（内含事务、状态优先级控制、预付款检查）
+				for _, detail := range detailResp.Response.OrderList {
+					if err := s.UpsertOrder(ctx, shopID, region, &detail); err != nil {
+						fmt.Printf("[Patrol] 店铺=%d 订单=%s 补录失败: %v\n", shopID, detail.OrderSN, err)
+						continue // 单条失败不影响其他订单
+					}
+					// 补录成功，计数 +1
+					patched++
+				}
+			}
+		}
+
+		// 检查是否还有下一页
+		if !listResp.Response.More {
+			break // Shopee 返回 more=false，本段巡检结束
+		}
+		// 用 Shopee 返回的游标请求下一页
+		cursor = listResp.Response.NextCursor
+	}
+
+	return found, patched, nil
+}
+

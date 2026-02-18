@@ -21,24 +21,26 @@ import (
 
 // WebhookService Webhook服务
 type WebhookService struct {
-	db           *gorm.DB
-	shardedDB    *database.ShardedDB
-	orderService *shopower.OrderService
-	shopService  *shopower.ShopService
-	rs           *redsync.Redsync
-	idGenerator  *utils.IDGenerator
+	db            *gorm.DB
+	shardedDB     *database.ShardedDB
+	orderService  *shopower.OrderService
+	shopService   *shopower.ShopService
+	returnService *ReturnService
+	rs            *redsync.Redsync
+	idGenerator   *utils.IDGenerator
 }
 
 // NewWebhookService 创建Webhook服务
 func NewWebhookService() *WebhookService {
 	db := database.GetDB()
 	return &WebhookService{
-		db:           db,
-		shardedDB:    database.NewShardedDB(db),
-		orderService: shopower.NewOrderService(),
-		shopService:  shopower.NewShopService(),
-		rs:           database.GetRedsync(),
-		idGenerator:  utils.NewIDGenerator(database.GetRedis()),
+		db:            db,
+		shardedDB:     database.NewShardedDB(db),
+		orderService:  NewOrderServiceWithPrepaymentCheck(),
+		shopService:   shopower.NewShopService(),
+		returnService: NewReturnService(),
+		rs:            database.GetRedsync(),
+		idGenerator:   utils.NewIDGenerator(database.GetRedis()),
 	}
 }
 
@@ -180,7 +182,7 @@ func (s *WebhookService) HandleOrderStatusUpdate(ctx context.Context, shopID uin
 	}
 	if orderData.Status == consts.OrderStatusReadyToShip {
 		// 待发货：拉取完整订单详情并全量更新（包含状态、买家、物流、金额等所有字段）
-		go s.refreshOrderDetail(shopID, orderTable, orderData.OrderSN)
+		go s.refreshOrderDetail(shopID, orderData.OrderSN)
 	} else {
 		// 其他状态：只需更新状态字段（兜底检查 status_locked，防止覆盖锁定状态）
 		if err := s.db.Table(orderTable).
@@ -221,11 +223,24 @@ func (s *WebhookService) HandleTrackingUpdate(ctx context.Context, shopID uint64
 		return
 	}
 
+	// 获取订单锁，防止与同一订单的状态更新/取消并发冲突
+	unlockFunc := s.AcquireOrderLock(ctx, shopID, trackingData.OrderSN)
+	if unlockFunc == nil {
+		return
+	}
+	defer unlockFunc()
+
 	s.LogWebhook(ctx, shopID, consts.WebhookTrackingUpdate, "tracking_update", data)
 
 	if trackingData.TrackingNumber != "" {
+		// 同时更新 shipments 表和 orders 表的物流单号
 		shipmentTable := database.GetShipmentTableName(shopID)
 		s.db.Table(shipmentTable).
+			Where("shop_id = ? AND order_sn = ?", shopID, trackingData.OrderSN).
+			Update("tracking_number", trackingData.TrackingNumber)
+
+		orderTable := database.GetOrderTableName(shopID)
+		s.db.Table(orderTable).
 			Where("shop_id = ? AND order_sn = ?", shopID, trackingData.OrderSN).
 			Update("tracking_number", trackingData.TrackingNumber)
 	}
@@ -261,10 +276,10 @@ func (s *WebhookService) HandleOrderCancel(ctx context.Context, shopID uint64, d
 
 	s.LogWebhook(ctx, shopID, consts.WebhookBuyerCancelOrder, "order_cancel", data)
 
-	// 更新订单状态 - 使用分表
+	// 更新订单状态（检查 status_locked，防止覆盖店主手动锁定的状态）
 	orderTable := database.GetOrderTableName(shopID)
 	s.db.Table(orderTable).
-		Where("shop_id = ? AND order_sn = ?", shopID, cancelData.OrderSN).
+		Where("shop_id = ? AND order_sn = ? AND status_locked = false", shopID, cancelData.OrderSN).
 		Update("order_status", consts.OrderStatusCancelled)
 
 	shipmentTable := database.GetShipmentTableName(shopID)
@@ -323,6 +338,90 @@ func (s *WebhookService) handleOrderCancelRefund(ctx context.Context, shopID uin
 		})
 }
 
+// HandleReturn 处理退货退款事件（退货创建 / 退货状态变更）
+//
+// Shopee 推送退货事件时调用，从 data 中提取 return_sn 和 order_sn，
+// 然后调用 GetReturnDetail 获取完整退货信息并保存到数据库。
+// 如果退货状态已确认退款，会自动解冻预付款。
+func (s *WebhookService) HandleReturn(ctx context.Context, shopID uint64, data any, timestamp int64, code int) {
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		s.logError(ctx, shopID, code, "marshal_error", err)
+		return
+	}
+
+	var returnData struct {
+		ReturnSN   string `json:"returnsn"`
+		OrderSN    string `json:"ordersn"`
+		Status     string `json:"status"`
+		UpdateTime int64  `json:"update_time"`
+	}
+	if err := json.Unmarshal(dataBytes, &returnData); err != nil {
+		s.logError(ctx, shopID, code, "unmarshal_error", err)
+		return
+	}
+
+	if returnData.ReturnSN == "" {
+		return
+	}
+
+	// Webhook 去重（使用 eventCode 而非 timestamp，防止虾皮重试时不同 timestamp 绕过去重）
+	rdb := database.GetRedis()
+	dedupKey := fmt.Sprintf(consts.KeyReturnDedup, shopID, returnData.ReturnSN, code)
+	ok, err := rdb.SetNX(ctx, dedupKey, 1, consts.WebhookDedupExpire).Result()
+	if err != nil || !ok {
+		return // 已处理过或 Redis 错误
+	}
+
+	// 记录日志
+	s.LogWebhook(ctx, shopID, code, "return_event", data)
+
+	// 异步拉取退货详情并处理退款
+	go s.refreshReturnDetail(shopID, returnData.ReturnSN)
+}
+
+// refreshReturnDetail 从 Shopee 拉取退货详情并调用 ReturnService 处理
+func (s *WebhookService) refreshReturnDetail(shopID uint64, returnSN string) {
+	ctx, cancel := NewBackgroundContext()
+	defer cancel()
+
+	// 查询店铺信息
+	var shop models.Shop
+	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {
+		return
+	}
+
+	// 查询授权信息
+	var auth models.ShopAuthorization
+	if err := s.db.Where("shop_id = ?", shopID).First(&auth).Error; err != nil {
+		return
+	}
+
+	client := shopee.NewClient(shop.Region)
+
+	// 等待限流令牌
+	if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
+		return
+	}
+
+	// 调用 Shopee GetReturnDetail 获取完整退货信息
+	var detailResp *shopee.ReturnDetailResponse
+	err := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
+		var err error
+		detailResp, err = client.GetReturnDetail(auth.AccessToken, shopID, returnSN)
+		return err
+	})
+	if err != nil {
+		fmt.Printf("[Webhook] 店铺=%d 退货=%s 获取退货详情失败: %v\n", shopID, returnSN, err)
+		return
+	}
+
+	// 通过 ReturnService 写入 DB 并处理退款（复用实例，避免每次创建新服务）
+	if err := s.returnService.UpsertReturn(ctx, shopID, detailResp); err != nil {
+		fmt.Printf("[Webhook] 店铺=%d 退货=%s 写入失败: %v\n", shopID, returnSN, err)
+	}
+}
+
 // HandleReservedOrder 处理保留订单
 func (s *WebhookService) HandleReservedOrder(ctx context.Context, shopID uint64, data any) {
 	s.LogWebhook(ctx, shopID, consts.WebhookReservedStock, "reserved_order", data)
@@ -345,15 +444,35 @@ func (s *WebhookService) LogWebhook(ctx context.Context, shopID uint64, code int
 	s.db.Table(logTable).Create(log)
 }
 
-func (s *WebhookService) refreshOrderDetail(shopID uint64, orderTable, orderSN string) {
+// refreshOrderDetail 从 Shopee 拉取完整订单详情并写入 DB
+// 此方法在独立 goroutine 中运行（HandleOrderStatusUpdate 中 go 调用），
+// 因此需要自己获取订单锁，防止与 Patrol 巡检并发写入同一订单时产生冲突。
+func (s *WebhookService) refreshOrderDetail(shopID uint64, orderSN string) {
+	// 独立的 30 秒超时上下文（不依赖调用方的 ctx）
 	ctx, cancel := NewBackgroundContext()
 	defer cancel()
 
+	// 获取订单级分布式锁，防止与 Patrol 或其他 Webhook 并发写同一订单
+	lockKey := fmt.Sprintf(consts.KeyOrderLock, shopID, orderSN)
+	mutex := s.rs.NewMutex(lockKey,
+		redsync.WithExpiry(consts.OrderLockExpire),
+		redsync.WithTries(3),                        // 允许重试 3 次（上层 HandleOrderStatusUpdate 已释放锁）
+		redsync.WithRetryDelay(200*time.Millisecond), // 每次重试间隔 200ms
+	)
+	unlockFunc, acquired := utils.TryLockWithAutoExtend(ctx, mutex, consts.OrderLockExpire/3)
+	if !acquired {
+		// 获取锁失败，说明有其他协程正在处理该订单，放弃（Patrol 或下次 Webhook 会补）
+		return
+	}
+	defer unlockFunc()
+
+	// 查询店铺信息（region 用于选择 API Host）
 	var shop models.Shop
 	if err := s.db.Where("shop_id = ?", shopID).First(&shop).Error; err != nil {
 		return
 	}
 
+	// 查询授权信息（access_token 用于调 Shopee API）
 	var auth models.ShopAuthorization
 	if err := s.db.Where("shop_id = ?", shopID).First(&auth).Error; err != nil {
 		return
@@ -361,10 +480,12 @@ func (s *WebhookService) refreshOrderDetail(shopID uint64, orderTable, orderSN s
 
 	client := shopee.NewClient(shop.Region)
 
+	// 等待限流令牌
 	if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
 		return
 	}
 
+	// 调用 Shopee GetOrderDetail 获取完整订单信息（含商品、地址、金额等）
 	var detailResp *shopee.OrderDetailResponse
 	err := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
 		var err error
@@ -375,40 +496,14 @@ func (s *WebhookService) refreshOrderDetail(shopID uint64, orderTable, orderSN s
 		return
 	}
 
-	s.saveOrderFromWebhook(ctx, orderTable, shopID, shop.Region, &detailResp.Response.OrderList[0])
+	// 通过统一的 UpsertOrder 写入 DB（内含事务 + 行锁 + 状态优先级 + 预付款检查）
+	s.saveOrderFromWebhook(ctx, shopID, shop.Region, &detailResp.Response.OrderList[0])
 }
 
-func (s *WebhookService) saveOrderFromWebhook(ctx context.Context, orderTable string, shopID uint64, region string, detail *shopee.OrderDetail) {
-	order := models.Order{
-		ShopID:          shopID,
-		OrderSN:         detail.OrderSN,
-		Region:          region,
-		OrderStatus:     detail.OrderStatus,
-		BuyerUserID:     uint64(detail.BuyerUserID),
-		BuyerUsername:   detail.BuyerUsername,
-		Currency:        detail.Currency,
-		ShippingCarrier: detail.ShippingCarrier,
-		TrackingNumber:  detail.TrackingNo,
-	}
-
-	if detail.PayTime > 0 {
-		payTime := time.Unix(detail.PayTime, 0)
-		order.PayTime = &payTime
-	}
-	if detail.CreateTime > 0 {
-		createTime := time.Unix(detail.CreateTime, 0)
-		order.CreateTime = &createTime
-	}
-	var existing models.Order
-	if err := s.db.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).First(&existing).Error; err == nil {
-		if !existing.StatusLocked {
-			order.ID = existing.ID
-			s.db.Table(orderTable).Where("id = ?", order.ID).Updates(&order)
-		}
-	} else {
-		orderID, _ := s.idGenerator.GenerateOrderID(ctx)
-		order.ID = uint64(orderID)
-		s.db.Table(orderTable).Create(&order)
+func (s *WebhookService) saveOrderFromWebhook(ctx context.Context, shopID uint64, region string, detail *shopee.OrderDetail) {
+	// 统一走 OrderService.UpsertOrder（唯一写入入口，含预付款检查）
+	if err := s.orderService.UpsertOrder(ctx, shopID, region, detail); err != nil {
+		fmt.Printf("[Webhook] 店铺=%d 订单=%s 写入失败: %v\n", shopID, detail.OrderSN, err)
 	}
 }
 

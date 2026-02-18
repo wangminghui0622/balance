@@ -374,7 +374,7 @@ GET /shopower/withdraw/list
 #### 申请充值
 
 ```
-POST /shopower/recharge/apply
+POST /shopower/recharge
 ```
 
 **请求参数**:

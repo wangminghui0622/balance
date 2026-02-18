@@ -144,20 +144,21 @@ func GenerateUserNo(id int64) string {
 
 const (
 	// 业务ID初始值（13位，按业务类型区分前缀）
-	IDInitialOrder            int64 = 1000000000000 // 订单相关 1xxx
-	IDInitialOrderItem        int64 = 1100000000000
-	IDInitialOrderAddress     int64 = 1200000000000
-	IDInitialOrderEscrow      int64 = 1300000000000
-	IDInitialOrderEscrowItem  int64 = 1400000000000
-	IDInitialOrderSettlement  int64 = 1500000000000
-	IDInitialShipmentRecord   int64 = 1600000000000
-	IDInitialShipment         int64 = 1700000000000
-	
-	IDInitialFinanceIncome    int64 = 2000000000000 // 财务相关 2xxx
-	IDInitialAccountTx        int64 = 2100000000000
-	IDInitialWithdrawApp      int64 = 2200000000000
-	IDInitialRechargeApp      int64 = 2300000000000
-	
+	IDInitialOrder           int64 = 1000000000000 // 订单相关 1xxx
+	IDInitialOrderItem       int64 = 1100000000000
+	IDInitialOrderAddress    int64 = 1200000000000
+	IDInitialOrderEscrow     int64 = 1300000000000
+	IDInitialOrderEscrowItem int64 = 1400000000000
+	IDInitialOrderSettlement int64 = 1500000000000
+	IDInitialShipmentRecord  int64 = 1600000000000
+	IDInitialShipment        int64 = 1700000000000
+	IDInitialReturn          int64 = 1800000000000 // 退货退款
+
+	IDInitialFinanceIncome int64 = 2000000000000 // 财务相关 2xxx
+	IDInitialAccountTx     int64 = 2100000000000
+	IDInitialWithdrawApp   int64 = 2200000000000
+	IDInitialRechargeApp   int64 = 2300000000000
+
 	IDInitialShop             int64 = 3000000000000 // 店铺相关 3xxx
 	IDInitialShopAuth         int64 = 3100000000000
 	IDInitialShopOperator     int64 = 3200000000000
@@ -165,17 +166,18 @@ const (
 	IDInitialProfitShareCfg   int64 = 3400000000000
 	IDInitialLogisticsChannel int64 = 3500000000000
 	IDInitialCollectionAcct   int64 = 3600000000000
-	
-	IDInitialPrepaymentAcct   int64 = 4000000000000 // 账户相关 4xxx
-	IDInitialDepositAcct      int64 = 4100000000000
-	IDInitialOperatorAcct     int64 = 4200000000000
+
+	IDInitialPrepaymentAcct    int64 = 4000000000000 // 账户相关 4xxx
+	IDInitialDepositAcct       int64 = 4100000000000
+	IDInitialOperatorAcct      int64 = 4200000000000
 	IDInitialShopOwnerCommAcct int64 = 4300000000000
-	IDInitialPlatformCommAcct int64 = 4400000000000
-	IDInitialPenaltyBonusAcct int64 = 4500000000000
-	IDInitialEscrowAcct       int64 = 4600000000000
-	
-	IDInitialOperationLog     int64 = 5000000000000 // 日志相关 5xxx
-	
+	IDInitialPlatformCommAcct  int64 = 4400000000000
+	IDInitialPenaltyBonusAcct  int64 = 4500000000000
+	IDInitialEscrowAcct        int64 = 4600000000000
+
+	IDInitialOperationLog int64 = 5000000000000 // 日志相关 5xxx
+	IDInitialNotification int64 = 5100000000000
+
 	// 业务ID增量范围
 	IDIncrementMin int64 = 30
 	IDIncrementMax int64 = 90
@@ -222,6 +224,10 @@ func (g *IDGenerator) GenerateShipmentID(ctx context.Context) (int64, error) {
 	return g.generateBusinessID(ctx, "id:gen:shipment", IDInitialShipment)
 }
 
+func (g *IDGenerator) GenerateReturnID(ctx context.Context) (int64, error) {
+	return g.generateBusinessID(ctx, "id:gen:return", IDInitialReturn)
+}
+
 // ==================== 财务相关ID ====================
 
 func (g *IDGenerator) GenerateFinanceIncomeID(ctx context.Context) (int64, error) {
@@ -236,7 +242,7 @@ func (g *IDGenerator) GenerateWithdrawApplicationID(ctx context.Context) (int64,
 	return g.generateBusinessID(ctx, "id:gen:withdraw_app", IDInitialWithdrawApp)
 }
 
-func (g *IDGenerator) GenerateRechargeApplicationID(ctx context.Context) (int64, error) {
+func (g *IDGenerator) GenerateRechargeRecordID(ctx context.Context) (int64, error) {
 	return g.generateBusinessID(ctx, "id:gen:recharge_app", IDInitialRechargeApp)
 }
 
@@ -304,6 +310,12 @@ func (g *IDGenerator) GenerateEscrowAccountID(ctx context.Context) (int64, error
 
 func (g *IDGenerator) GenerateOperationLogID(ctx context.Context) (int64, error) {
 	return g.generateBusinessID(ctx, "id:gen:operation_log", IDInitialOperationLog)
+}
+
+// ==================== 通知相关ID ====================
+
+func (g *IDGenerator) GenerateNotificationID(ctx context.Context) (int64, error) {
+	return g.generateBusinessID(ctx, "id:gen:notification", IDInitialNotification)
 }
 
 // ==================== 批量生成ID ====================

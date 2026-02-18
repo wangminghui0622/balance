@@ -70,6 +70,48 @@ email:
   from: your_email@qq.com
   from_name: 天平系统
 
+# 第三方支付配置（预留，待对接时填入真实密钥并启用）
+payment:
+  paypal:
+    enabled: false
+    sandbox: true
+    client_id: ""
+    client_secret: ""
+    webhook_id: ""
+    return_url: ""
+    cancel_url: ""
+  alipay:
+    enabled: false
+    sandbox: true
+    app_id: ""
+    private_key: ""
+    public_key: ""
+    notify_url: ""
+    return_url: ""
+  linepay:
+    enabled: false
+    sandbox: true
+    channel_id: ""
+    channel_secret: ""
+    return_url: ""
+    cancel_url: ""
+  visa:
+    enabled: false
+    sandbox: true
+    provider: "stripe"  # stripe / tappay / ecpay
+    api_key: ""
+    secret_key: ""
+    webhook_secret: ""
+  wechat:
+    enabled: false
+    sandbox: true
+    app_id: ""
+    mch_id: ""
+    api_key_v3: ""
+    serial_no: ""
+    private_key: ""
+    notify_url: ""
+
 # 日志配置
 log:
   level: debug  # debug, info, warn, error

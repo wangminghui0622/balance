@@ -7,6 +7,7 @@ import (
 
 	"balance/backend/internal/database"
 	"balance/backend/internal/models"
+	"balance/backend/internal/utils"
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -17,6 +18,7 @@ import (
 type AccountService struct {
 	db        *gorm.DB
 	shardedDB *database.ShardedDB
+	idGen     *utils.IDGenerator
 }
 
 // NewAccountService 创建账户服务
@@ -25,6 +27,7 @@ func NewAccountService() *AccountService {
 	return &AccountService{
 		db:        db,
 		shardedDB: database.NewShardedDB(db),
+		idGen:     utils.NewIDGenerator(database.GetRedis()),
 	}
 }
 
@@ -33,8 +36,15 @@ func (s *AccountService) GenerateTransactionNo(accountType string) string {
 	return fmt.Sprintf("%s%d%d", accountType[:3], time.Now().UnixNano(), time.Now().UnixMicro()%1000)
 }
 
-// createTransaction 创建账户流水（使用分表）
+// createTransaction 创建账户流水（使用分表，自动生成ID）
 func (s *AccountService) createTransaction(tx *gorm.DB, at *models.AccountTransaction) error {
+	if at.ID == 0 {
+		id, err := s.idGen.GenerateAccountTransactionID(context.Background())
+		if err != nil {
+			return fmt.Errorf("生成流水ID失败: %w", err)
+		}
+		at.ID = uint64(id)
+	}
 	txTable := database.GetAccountTransactionTableName(at.AdminID)
 	return tx.Table(txTable).Create(at).Error
 }
@@ -53,7 +63,12 @@ func (s *AccountService) GetOrCreatePrepaymentAccount(ctx context.Context, admin
 	}
 
 	// 创建新账户
+	id, idErr := s.idGen.GeneratePrepaymentAccountID(ctx)
+	if idErr != nil {
+		return nil, fmt.Errorf("生成预付款账户ID失败: %w", idErr)
+	}
 	account = models.PrepaymentAccount{
+		ID:       uint64(id),
 		AdminID:  adminID,
 		Balance:  decimal.Zero,
 		Currency: "TWD",
@@ -86,7 +101,12 @@ func (s *AccountService) RechargePrepayment(ctx context.Context, adminID int64, 
 		// 使用 FOR UPDATE 行锁防止并发更新
 		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
+				id, idErr := s.idGen.GeneratePrepaymentAccountID(ctx)
+				if idErr != nil {
+					return fmt.Errorf("生成预付款账户ID失败: %w", idErr)
+				}
 				account = models.PrepaymentAccount{
+					ID:       uint64(id),
 					AdminID:  adminID,
 					Currency: "TWD",
 					Status:   models.AccountStatusNormal,
@@ -126,16 +146,23 @@ func (s *AccountService) RechargePrepayment(ctx context.Context, adminID int64, 
 }
 
 // FreezePrepayment 冻结预付款 (发货时调用)
+// 独立事务版本：内部会开启新事务
 func (s *AccountService) FreezePrepayment(ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	return s.FreezePrepaymentInTx(s.db, ctx, adminID, amount, orderSN, remark)
+}
+
+// FreezePrepaymentInTx 冻结预付款（事务参与版本：复用调用方传入的 db/tx）
+// 当调用方已持有事务时使用此方法，避免嵌套独立事务导致连接池死锁
+func (s *AccountService) FreezePrepaymentInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("冻结金额必须大于0")
 	}
 
 	var tx *models.AccountTransaction
-	err := s.db.Transaction(func(db *gorm.DB) error {
+	err := db.Transaction(func(innerTx *gorm.DB) error {
 		var account models.PrepaymentAccount
 		// 使用 FOR UPDATE 行锁防止并发更新
-		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		if err := innerTx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			return fmt.Errorf("预付款账户不存在")
 		}
 
@@ -151,7 +178,7 @@ func (s *AccountService) FreezePrepayment(ctx context.Context, adminID int64, am
 		account.Balance = account.Balance.Sub(amount)
 		account.FrozenAmount = account.FrozenAmount.Add(amount)
 
-		if err := db.Save(&account).Error; err != nil {
+		if err := innerTx.Save(&account).Error; err != nil {
 			return err
 		}
 
@@ -167,23 +194,28 @@ func (s *AccountService) FreezePrepayment(ctx context.Context, adminID int64, am
 			RelatedOrderSN:  orderSN,
 			Remark:          remark,
 		}
-		return s.createTransaction(db, tx)
+		return s.createTransaction(innerTx, tx)
 	})
 
 	return tx, err
 }
 
 // UnfreezePrepayment 解冻预付款 (订单取消时调用)
+// 独立事务版本
 func (s *AccountService) UnfreezePrepayment(ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	return s.UnfreezePrepaymentInTx(s.db, ctx, adminID, amount, orderSN, remark)
+}
+
+// UnfreezePrepaymentInTx 解冻预付款（事务参与版本）
+func (s *AccountService) UnfreezePrepaymentInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("解冻金额必须大于0")
 	}
 
 	var tx *models.AccountTransaction
-	err := s.db.Transaction(func(db *gorm.DB) error {
+	err := db.Transaction(func(innerTx *gorm.DB) error {
 		var account models.PrepaymentAccount
-		// 使用 FOR UPDATE 行锁防止并发更新
-		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		if err := innerTx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			return fmt.Errorf("预付款账户不存在")
 		}
 
@@ -195,11 +227,10 @@ func (s *AccountService) UnfreezePrepayment(ctx context.Context, adminID int64, 
 		account.Balance = account.Balance.Add(amount)
 		account.FrozenAmount = account.FrozenAmount.Sub(amount)
 
-		if err := db.Save(&account).Error; err != nil {
+		if err := innerTx.Save(&account).Error; err != nil {
 			return err
 		}
 
-		// 记录流水
 		tx = &models.AccountTransaction{
 			TransactionNo:   s.GenerateTransactionNo(models.AccountTypePrepayment),
 			AccountType:     models.AccountTypePrepayment,
@@ -211,7 +242,7 @@ func (s *AccountService) UnfreezePrepayment(ctx context.Context, adminID int64, 
 			RelatedOrderSN:  orderSN,
 			Remark:          remark,
 		}
-		return s.createTransaction(db, tx)
+		return s.createTransaction(innerTx, tx)
 	})
 
 	return tx, err
@@ -219,14 +250,18 @@ func (s *AccountService) UnfreezePrepayment(ctx context.Context, adminID int64, 
 
 // SettlePrepayment 结算预付款 (订单完成时，从冻结金额扣除)
 func (s *AccountService) SettlePrepayment(ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	return s.SettlePrepaymentInTx(s.db, ctx, adminID, amount, orderSN, remark)
+}
+
+// SettlePrepaymentInTx 结算预付款（事务参与版本）
+func (s *AccountService) SettlePrepaymentInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("结算金额必须大于0")
 	}
 
 	var at *models.AccountTransaction
-	err := s.db.Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
 		var account models.PrepaymentAccount
-		// 使用 FOR UPDATE 行锁防止并发更新
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			return fmt.Errorf("预付款账户不存在")
 		}
@@ -243,7 +278,6 @@ func (s *AccountService) SettlePrepayment(ctx context.Context, adminID int64, am
 			return err
 		}
 
-		// 记录流水
 		at = &models.AccountTransaction{
 			TransactionNo:   s.GenerateTransactionNo(models.AccountTypePrepayment),
 			AccountType:     models.AccountTypePrepayment,
@@ -275,7 +309,12 @@ func (s *AccountService) GetOrCreateOperatorAccount(ctx context.Context, adminID
 	}
 
 	// 创建新账户
+	id, idErr := s.idGen.GenerateOperatorAccountID(ctx)
+	if idErr != nil {
+		return nil, fmt.Errorf("生成运营账户ID失败: %w", idErr)
+	}
 	account = models.OperatorAccount{
+		ID:       uint64(id),
 		AdminID:  adminID,
 		Balance:  decimal.Zero,
 		Currency: "TWD",
@@ -289,17 +328,26 @@ func (s *AccountService) GetOrCreateOperatorAccount(ctx context.Context, adminID
 
 // AddOperatorIncome 增加运营收入 (结算时调用)
 func (s *AccountService) AddOperatorIncome(ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	return s.AddOperatorIncomeInTx(s.db, ctx, adminID, amount, orderSN, remark)
+}
+
+// AddOperatorIncomeInTx 增加运营收入（事务参与版本）
+func (s *AccountService) AddOperatorIncomeInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("收入金额必须大于0")
 	}
 
 	var at *models.AccountTransaction
-	err := s.db.Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
 		var account models.OperatorAccount
-		// 使用 FOR UPDATE 行锁防止并发更新
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
+				id, idErr := s.idGen.GenerateOperatorAccountID(ctx)
+				if idErr != nil {
+					return fmt.Errorf("生成运营账户ID失败: %w", idErr)
+				}
 				account = models.OperatorAccount{
+					ID:       uint64(id),
 					AdminID:  adminID,
 					Currency: "TWD",
 					Status:   models.AccountStatusNormal,
@@ -320,7 +368,6 @@ func (s *AccountService) AddOperatorIncome(ctx context.Context, adminID int64, a
 			return err
 		}
 
-		// 记录流水
 		at = &models.AccountTransaction{
 			TransactionNo:   s.GenerateTransactionNo(models.AccountTypeOperator),
 			AccountType:     models.AccountTypeOperator,
@@ -340,14 +387,19 @@ func (s *AccountService) AddOperatorIncome(ctx context.Context, adminID int64, a
 
 // DeductOperatorBalance 扣除运营账户余额 (调账扣款时调用)
 func (s *AccountService) DeductOperatorBalance(ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	return s.DeductOperatorBalanceInTx(s.db, ctx, adminID, amount, orderSN, remark)
+}
+
+// DeductOperatorBalanceInTx 扣除运营账户余额（事务参与版本）
+func (s *AccountService) DeductOperatorBalanceInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("扣款金额必须大于0")
 	}
 
 	var tx *models.AccountTransaction
-	err := s.db.Transaction(func(db *gorm.DB) error {
+	err := db.Transaction(func(innerTx *gorm.DB) error {
 		var account models.OperatorAccount
-		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		if err := innerTx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			return fmt.Errorf("运营账户不存在")
 		}
 
@@ -358,7 +410,7 @@ func (s *AccountService) DeductOperatorBalance(ctx context.Context, adminID int6
 		balanceBefore := account.Balance
 		account.Balance = account.Balance.Sub(amount)
 
-		if err := db.Save(&account).Error; err != nil {
+		if err := innerTx.Save(&account).Error; err != nil {
 			return err
 		}
 
@@ -373,7 +425,7 @@ func (s *AccountService) DeductOperatorBalance(ctx context.Context, adminID int6
 			RelatedOrderSN:  orderSN,
 			Remark:          remark,
 		}
-		return s.createTransaction(db, tx)
+		return s.createTransaction(innerTx, tx)
 	})
 
 	return tx, err
@@ -393,7 +445,12 @@ func (s *AccountService) GetOrCreateDepositAccount(ctx context.Context, adminID 
 	}
 
 	// 创建新账户
+	id, idErr := s.idGen.GenerateDepositAccountID(ctx)
+	if idErr != nil {
+		return nil, fmt.Errorf("生成保证金账户ID失败: %w", idErr)
+	}
 	account = models.DepositAccount{
+		ID:       uint64(id),
 		AdminID:  adminID,
 		Balance:  decimal.Zero,
 		Currency: "TWD",
@@ -417,7 +474,12 @@ func (s *AccountService) PayDeposit(ctx context.Context, adminID int64, amount d
 		// 使用 FOR UPDATE 行锁防止并发更新
 		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
+				did, idErr := s.idGen.GenerateDepositAccountID(ctx)
+				if idErr != nil {
+					return fmt.Errorf("生成保证金账户ID失败: %w", idErr)
+				}
 				account = models.DepositAccount{
+					ID:       uint64(did),
 					AdminID:  adminID,
 					Currency: "TWD",
 					Status:   models.AccountStatusNormal,
@@ -463,16 +525,28 @@ func (s *AccountService) PayDeposit(ctx context.Context, adminID int64, amount d
 // ==================== 查询 ====================
 
 // GetAccountTransactions 获取账户流水 - 使用分表
-func (s *AccountService) GetAccountTransactions(ctx context.Context, accountType string, adminID int64, page, pageSize int) ([]models.AccountTransaction, int64, error) {
+// transactionTypes 为空时查全部，非空时按交易类型过滤（支持多类型）
+func (s *AccountService) GetAccountTransactions(ctx context.Context, accountType string, adminID int64, page, pageSize int, transactionTypes ...string) ([]models.AccountTransaction, int64, error) {
 	var transactions []models.AccountTransaction
 	var total int64
 
 	txTable := database.GetAccountTransactionTableName(adminID)
-	query := s.db.Table(txTable).Where("account_type = ? AND admin_id = ?", accountType, adminID)
-	query.Count(&total)
+
+	buildWhere := func(db *gorm.DB) *gorm.DB {
+		q := db.Table(txTable).Where("account_type = ? AND admin_id = ?", accountType, adminID)
+		if len(transactionTypes) > 0 {
+			q = q.Where("transaction_type IN ?", transactionTypes)
+		}
+		return q
+	}
+
+	// Count 和 Find 必须用独立的 Session，否则 Count 会污染 query 的 SELECT 导致 Find 时而无数据
+	if err := buildWhere(s.db).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 
 	offset := (page - 1) * pageSize
-	err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&transactions).Error
+	err := buildWhere(s.db).Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&transactions).Error
 	return transactions, total, err
 }
 
@@ -489,7 +563,12 @@ func (s *AccountService) GetOrCreateShopOwnerCommissionAccount(ctx context.Conte
 		return nil, err
 	}
 
+	cid, idErr := s.idGen.GenerateShopOwnerCommissionAccountID(ctx)
+	if idErr != nil {
+		return nil, fmt.Errorf("生成店主佣金账户ID失败: %w", idErr)
+	}
 	account = models.ShopOwnerCommissionAccount{
+		ID:       uint64(cid),
 		AdminID:  adminID,
 		Balance:  decimal.Zero,
 		Currency: "TWD",
@@ -503,17 +582,26 @@ func (s *AccountService) GetOrCreateShopOwnerCommissionAccount(ctx context.Conte
 
 // AddShopOwnerCommission 增加店主佣金 (结算时调用)
 func (s *AccountService) AddShopOwnerCommission(ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	return s.AddShopOwnerCommissionInTx(s.db, ctx, adminID, amount, orderSN, remark)
+}
+
+// AddShopOwnerCommissionInTx 增加店主佣金（事务参与版本）
+func (s *AccountService) AddShopOwnerCommissionInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("佣金金额必须大于0")
 	}
 
 	var at *models.AccountTransaction
-	err := s.db.Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
 		var account models.ShopOwnerCommissionAccount
-		// 使用 FOR UPDATE 行锁防止并发更新
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
+				scid, idErr := s.idGen.GenerateShopOwnerCommissionAccountID(ctx)
+				if idErr != nil {
+					return fmt.Errorf("生成店主佣金账户ID失败: %w", idErr)
+				}
 				account = models.ShopOwnerCommissionAccount{
+					ID:       uint64(scid),
 					AdminID:  adminID,
 					Currency: "TWD",
 					Status:   models.AccountStatusNormal,
@@ -553,14 +641,19 @@ func (s *AccountService) AddShopOwnerCommission(ctx context.Context, adminID int
 
 // DeductShopOwnerCommission 扣除店主佣金 (调账扣款时调用)
 func (s *AccountService) DeductShopOwnerCommission(ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	return s.DeductShopOwnerCommissionInTx(s.db, ctx, adminID, amount, orderSN, remark)
+}
+
+// DeductShopOwnerCommissionInTx 扣除店主佣金（事务参与版本）
+func (s *AccountService) DeductShopOwnerCommissionInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("扣款金额必须大于0")
 	}
 
 	var tx *models.AccountTransaction
-	err := s.db.Transaction(func(db *gorm.DB) error {
+	err := db.Transaction(func(innerTx *gorm.DB) error {
 		var account models.ShopOwnerCommissionAccount
-		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+		if err := innerTx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			return fmt.Errorf("店主佣金账户不存在")
 		}
 
@@ -571,7 +664,7 @@ func (s *AccountService) DeductShopOwnerCommission(ctx context.Context, adminID 
 		balanceBefore := account.Balance
 		account.Balance = account.Balance.Sub(amount)
 
-		if err := db.Save(&account).Error; err != nil {
+		if err := innerTx.Save(&account).Error; err != nil {
 			return err
 		}
 
@@ -586,7 +679,7 @@ func (s *AccountService) DeductShopOwnerCommission(ctx context.Context, adminID 
 			RelatedOrderSN:  orderSN,
 			Remark:          remark,
 		}
-		return s.createTransaction(db, tx)
+		return s.createTransaction(innerTx, tx)
 	})
 
 	return tx, err
@@ -605,7 +698,12 @@ func (s *AccountService) GetOrCreatePlatformCommissionAccount(ctx context.Contex
 		return nil, err
 	}
 
+	pid, idErr := s.idGen.GeneratePlatformCommissionAccountID(ctx)
+	if idErr != nil {
+		return nil, fmt.Errorf("生成平台佣金账户ID失败: %w", idErr)
+	}
 	account = models.PlatformCommissionAccount{
+		ID:       uint64(pid),
 		Balance:  decimal.Zero,
 		Currency: "TWD",
 		Status:   models.AccountStatusNormal,
@@ -618,17 +716,26 @@ func (s *AccountService) GetOrCreatePlatformCommissionAccount(ctx context.Contex
 
 // AddPlatformCommission 增加平台佣金 (结算时调用)
 func (s *AccountService) AddPlatformCommission(ctx context.Context, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	return s.AddPlatformCommissionInTx(s.db, ctx, amount, orderSN, remark)
+}
+
+// AddPlatformCommissionInTx 增加平台佣金（事务参与版本）
+func (s *AccountService) AddPlatformCommissionInTx(db *gorm.DB, ctx context.Context, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("佣金金额必须大于0")
 	}
 
 	var at *models.AccountTransaction
-	err := s.db.Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
 		var account models.PlatformCommissionAccount
-		// 使用 FOR UPDATE 行锁防止并发更新
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
+				pcid, idErr := s.idGen.GeneratePlatformCommissionAccountID(ctx)
+				if idErr != nil {
+					return fmt.Errorf("生成平台佣金账户ID失败: %w", idErr)
+				}
 				account = models.PlatformCommissionAccount{
+					ID:       uint64(pcid),
 					Currency: "TWD",
 					Status:   models.AccountStatusNormal,
 				}
@@ -651,7 +758,7 @@ func (s *AccountService) AddPlatformCommission(ctx context.Context, amount decim
 		at = &models.AccountTransaction{
 			TransactionNo:   s.GenerateTransactionNo(models.AccountTypePlatformCommission),
 			AccountType:     models.AccountTypePlatformCommission,
-			AdminID:         0, // 平台账户无 AdminID
+			AdminID:         0,
 			TransactionType: models.TxTypePlatformFee,
 			Amount:          amount,
 			BalanceBefore:   balanceBefore,
@@ -667,14 +774,19 @@ func (s *AccountService) AddPlatformCommission(ctx context.Context, amount decim
 
 // DeductPlatformCommission 扣除平台佣金 (调账扣款时调用)
 func (s *AccountService) DeductPlatformCommission(ctx context.Context, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	return s.DeductPlatformCommissionInTx(s.db, ctx, amount, orderSN, remark)
+}
+
+// DeductPlatformCommissionInTx 扣除平台佣金（事务参与版本）
+func (s *AccountService) DeductPlatformCommissionInTx(db *gorm.DB, ctx context.Context, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("扣款金额必须大于0")
 	}
 
 	var tx *models.AccountTransaction
-	err := s.db.Transaction(func(db *gorm.DB) error {
+	err := db.Transaction(func(innerTx *gorm.DB) error {
 		var account models.PlatformCommissionAccount
-		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account).Error; err != nil {
+		if err := innerTx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account).Error; err != nil {
 			return fmt.Errorf("平台佣金账户不存在")
 		}
 
@@ -685,14 +797,14 @@ func (s *AccountService) DeductPlatformCommission(ctx context.Context, amount de
 		balanceBefore := account.Balance
 		account.Balance = account.Balance.Sub(amount)
 
-		if err := db.Save(&account).Error; err != nil {
+		if err := innerTx.Save(&account).Error; err != nil {
 			return err
 		}
 
 		tx = &models.AccountTransaction{
 			TransactionNo:   s.GenerateTransactionNo(models.AccountTypePlatformCommission),
 			AccountType:     models.AccountTypePlatformCommission,
-			AdminID:         0, // 平台账户无 AdminID
+			AdminID:         0,
 			TransactionType: models.TxTypeAdjustment,
 			Amount:          amount.Neg(),
 			BalanceBefore:   balanceBefore,
@@ -700,7 +812,7 @@ func (s *AccountService) DeductPlatformCommission(ctx context.Context, amount de
 			RelatedOrderSN:  orderSN,
 			Remark:          remark,
 		}
-		return s.createTransaction(db, tx)
+		return s.createTransaction(innerTx, tx)
 	})
 
 	return tx, err
@@ -719,7 +831,12 @@ func (s *AccountService) GetOrCreateEscrowAccount(ctx context.Context, adminID i
 		return nil, err
 	}
 
+	eid, idErr := s.idGen.GenerateEscrowAccountID(ctx)
+	if idErr != nil {
+		return nil, fmt.Errorf("生成托管账户ID失败: %w", idErr)
+	}
 	account = models.EscrowAccount{
+		ID:       uint64(eid),
 		AdminID:  adminID,
 		Balance:  decimal.Zero,
 		Currency: "TWD",
@@ -742,7 +859,12 @@ func (s *AccountService) TransferToEscrow(ctx context.Context, adminID int64, am
 		// 使用 FOR UPDATE 行锁防止并发更新
 		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
+				esid, idErr := s.idGen.GenerateEscrowAccountID(ctx)
+				if idErr != nil {
+					return fmt.Errorf("生成托管账户ID失败: %w", idErr)
+				}
 				account = models.EscrowAccount{
+					ID:       uint64(esid),
 					AdminID:  adminID,
 					Currency: "TWD",
 					Status:   models.AccountStatusNormal,
@@ -763,13 +885,17 @@ func (s *AccountService) TransferToEscrow(ctx context.Context, adminID int64, am
 
 // TransferFromEscrow 从托管账户转出 (结算时调用)
 func (s *AccountService) TransferFromEscrow(ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) error {
+	return s.TransferFromEscrowInTx(s.db, ctx, adminID, amount, orderSN, remark)
+}
+
+// TransferFromEscrowInTx 从托管账户转出（事务参与版本）
+func (s *AccountService) TransferFromEscrowInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) error {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return fmt.Errorf("转出金额必须大于0")
 	}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	return db.Transaction(func(tx *gorm.DB) error {
 		var account models.EscrowAccount
-		// 使用 FOR UPDATE 行锁防止并发更新
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
 			return fmt.Errorf("托管账户不存在")
 		}
@@ -838,7 +964,12 @@ func (s *AccountService) ApplyWithdraw(ctx context.Context, adminID int64, accou
 	}
 
 	// 创建提现申请
+	wdID, idErr := s.idGen.GenerateWithdrawApplicationID(ctx)
+	if idErr != nil {
+		return nil, fmt.Errorf("生成提现申请ID失败: %w", idErr)
+	}
 	application := &models.WithdrawApplication{
+		ID:                  uint64(wdID),
 		ApplicationNo:       s.GenerateApplicationNo("WD"),
 		AdminID:             adminID,
 		AccountType:         accountType,
@@ -1094,7 +1225,7 @@ func (s *AccountService) GetWithdrawApplications(ctx context.Context, adminID in
 // ==================== 充值申请功能 ====================
 
 // ApplyRecharge 申请充值 (线下充值)
-func (s *AccountService) ApplyRecharge(ctx context.Context, adminID int64, accountType string, amount decimal.Decimal, paymentMethod string, paymentProof string, remark string) (*models.RechargeApplication, error) {
+func (s *AccountService) ApplyRecharge(ctx context.Context, adminID int64, accountType string, amount decimal.Decimal, paymentMethod string, paymentProof string, remark string) (*models.RechargeRecord, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("充值金额必须大于0")
 	}
@@ -1104,7 +1235,12 @@ func (s *AccountService) ApplyRecharge(ctx context.Context, adminID int64, accou
 		return nil, fmt.Errorf("只能充值预付款账户或保证金账户")
 	}
 
-	application := &models.RechargeApplication{
+	rcID, idErr := s.idGen.GenerateRechargeRecordID(ctx)
+	if idErr != nil {
+		return nil, fmt.Errorf("生成充值申请ID失败: %w", idErr)
+	}
+	application := &models.RechargeRecord{
+		ID:            uint64(rcID),
 		ApplicationNo: s.GenerateApplicationNo("RC"),
 		AdminID:       adminID,
 		AccountType:   accountType,
@@ -1126,7 +1262,7 @@ func (s *AccountService) ApplyRecharge(ctx context.Context, adminID int64, accou
 // ApproveRecharge 审批通过充值
 func (s *AccountService) ApproveRecharge(ctx context.Context, applicationID uint64, auditBy int64, auditRemark string) error {
 	return s.db.Transaction(func(db *gorm.DB) error {
-		var application models.RechargeApplication
+		var application models.RechargeRecord
 		// 使用 FOR UPDATE 行锁防止并发审批
 		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ?", applicationID, models.ApplicationStatusPending).First(&application).Error; err != nil {
 			return fmt.Errorf("充值申请不存在或已处理")
@@ -1157,7 +1293,7 @@ func (s *AccountService) ApproveRecharge(ctx context.Context, applicationID uint
 // RejectRecharge 拒绝充值
 func (s *AccountService) RejectRecharge(ctx context.Context, applicationID uint64, auditBy int64, auditRemark string) error {
 	return s.db.Transaction(func(db *gorm.DB) error {
-		var application models.RechargeApplication
+		var application models.RechargeRecord
 		// 使用 FOR UPDATE 行锁防止并发审批
 		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ?", applicationID, models.ApplicationStatusPending).First(&application).Error; err != nil {
 			return fmt.Errorf("充值申请不存在或已处理")
@@ -1173,12 +1309,12 @@ func (s *AccountService) RejectRecharge(ctx context.Context, applicationID uint6
 	})
 }
 
-// GetRechargeApplications 获取充值申请列表
-func (s *AccountService) GetRechargeApplications(ctx context.Context, adminID int64, status int8, page, pageSize int) ([]models.RechargeApplication, int64, error) {
-	var applications []models.RechargeApplication
+// GetRechargeRecords 获取充值申请列表
+func (s *AccountService) GetRechargeRecords(ctx context.Context, adminID int64, status int8, page, pageSize int) ([]models.RechargeRecord, int64, error) {
+	var applications []models.RechargeRecord
 	var total int64
 
-	query := s.db.Model(&models.RechargeApplication{})
+	query := s.db.Model(&models.RechargeRecord{})
 	if adminID > 0 {
 		query = query.Where("admin_id = ?", adminID)
 	}

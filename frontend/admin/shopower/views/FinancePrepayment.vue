@@ -289,10 +289,33 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import {
+	shopowerAccountApi,
+	shopowerFinanceApi,
+	TransactionTypeText,
+	type AccountTransaction
+} from '@share/api/account'
 
+// ==================== 交易类型映射 ====================
+const txTypeToLabel: Record<string, string> = {
+	recharge: '充值',
+	withdraw: '提现',
+	freeze: '订单付款',
+	unfreeze: '解冻',
+	order_pay: '订单付款',
+	order_refund: '订单退款',
+	adjustment: '账款调整',
+	profit_share: '转存',
+	cost_settle: '转存',
+	platform_fee: '账款调整',
+	deposit_pay: '账款调整',
+	deposit_refund: '账款调整',
+}
+
+// ==================== 页面数据 ====================
 interface PrepaymentRecord {
 	date: string
 	type: string
@@ -305,48 +328,123 @@ interface PrepaymentRecord {
 
 const activeTab = ref('all')
 const searchKeyword = ref('')
-const dateRange = ref<string[]>(['2025-09-01', '2025-09-10'])
+const dateRange = ref<string[]>([])
+const loading = ref(false)
 
 const summaryData = reactive({
-	balance: 223560.50,
-	totalRecharge: 1445860.50,
-	rechargeCount: 12344,
-	transferCount: 12344,
-	withdrawCount: 123,
-	orderPayCount: 12344,
-	adjustmentCount: 12344
+	balance: 0,
+	totalRecharge: 0,
+	rechargeCount: 0,
+	transferCount: 0,
+	withdrawCount: 0,
+	orderPayCount: 0,
+	adjustmentCount: 0
 })
 
 const pagination = reactive({
 	page: 1,
 	pageSize: 10,
-	total: 113
+	total: 0
 })
 
-// Mock数据
-const prepaymentList = ref<PrepaymentRecord[]>([
-	{ date: '2026-12-12 23:59:59', type: '充值', channel: '文字占位符文字占位符', orderNo: 'X250904KQ2P078R', amount: '1,000.00', balance: '223,560.50', status: '已完成' },
-	{ date: '2026-12-12 23:59:59', type: '转存', channel: '文字占位符文字占位符', orderNo: 'X250904KQ2P078R', amount: '1,000.00', balance: '223,560.50', status: '已完成' },
-	{ date: '2026-12-12 23:59:59', type: '提现', channel: '文字占位符文字占位符', orderNo: 'X250904KQ2P078R', amount: '1,000.00', balance: '223,560.50', status: '已完成' },
-	{ date: '2026-12-12 23:59:59', type: '订单付款', channel: '文字占位符文字占位符', orderNo: 'X250904KQ2P078R', amount: '1,000.00', balance: '223,560.50', status: '已完成' },
-	{ date: '2026-12-12 23:59:59', type: '账款调整', channel: '文字占位符文字占位符', orderNo: 'X250904KQ2P078R', amount: '1,000.00', balance: '223,560.50', status: '已完成' },
-	{ date: '2026-12-12 23:59:59', type: '充值', channel: '文字占位符文字占位符', orderNo: 'X250904KQ2P078R', amount: '1,000.00', balance: '223,560.50', status: '已完成' },
-	{ date: '2026-12-12 23:59:59', type: '充值', channel: '文字占位符文字占位符', orderNo: 'X250904KQ2P078R', amount: '1,000.00', balance: '223,560.50', status: '已完成' },
-	{ date: '2026-12-12 23:59:59', type: '充值', channel: '文字占位符文字占位符', orderNo: 'X250904KQ2P078R', amount: '1,000.00', balance: '223,560.50', status: '已完成' },
-	{ date: '2026-12-12 23:59:59', type: '充值', channel: '文字占位符文字占位符', orderNo: 'X250904KQ2P078R', amount: '1,000.00', balance: '223,560.50', status: '已完成' },
-	{ date: '2026-12-12 23:59:59', type: '充值', channel: '文字占位符文字占位符', orderNo: 'X250904KQ2P078R', amount: '1,000.00', balance: '223,560.50', status: '已完成' }
-])
+const prepaymentList = ref<PrepaymentRecord[]>([])
 
-const filteredList = computed(() => {
-	let result = [...prepaymentList.value]
-	if (searchKeyword.value) {
-		const keyword = searchKeyword.value.toLowerCase()
-		result = result.filter(item =>
-			item.orderNo.toLowerCase().includes(keyword) ||
-			item.type.toLowerCase().includes(keyword)
-		)
+// ==================== API 调用 ====================
+
+// 加载账户数据
+const fetchAccount = async () => {
+	try {
+		const res = await shopowerAccountApi.getPrepaymentAccount()
+		if (res.code === 0 && res.data) {
+			summaryData.balance = parseFloat(res.data.balance) || 0
+			summaryData.totalRecharge = parseFloat(res.data.total_recharge) || 0
+		}
+	} catch (e) {
+		console.error('获取预付款账户失败:', e)
 	}
-	return result
+}
+
+// Tab name → 后端 transaction_type 参数映射（多个用逗号分隔）
+const tabToTransactionType: Record<string, string> = {
+	all: '',
+	recharge: 'recharge',
+	transfer: 'profit_share,cost_settle',
+	withdraw: 'withdraw',
+	orderPay: 'freeze',
+	adjustment: 'adjustment,platform_fee,deposit_pay,deposit_refund'
+}
+
+// 加载流水列表
+const fetchTransactions = async () => {
+	loading.value = true
+	try {
+		const txType = tabToTransactionType[activeTab.value] || ''
+		const res = await shopowerAccountApi.getPrepaymentTransactions({
+			page: pagination.page,
+			page_size: pagination.pageSize,
+			...(txType ? { transaction_type: txType } : {})
+		})
+		if (res.code === 0 && res.data) {
+			const list = res.data.list || []
+			pagination.total = res.data.total || 0
+
+			// 统计各类型笔数
+			let rechargeCount = 0, transferCount = 0, withdrawCount = 0, orderPayCount = 0, adjustmentCount = 0
+			// 转换为页面用的 PrepaymentRecord 格式
+			prepaymentList.value = list.map((tx: AccountTransaction) => {
+				const label = txTypeToLabel[tx.transaction_type] || (TransactionTypeText[tx.transaction_type] || tx.transaction_type)
+				// 统计
+				if (label === '充值') rechargeCount++
+				else if (label === '转存') transferCount++
+				else if (label === '提现') withdrawCount++
+				else if (label === '订单付款') orderPayCount++
+				else adjustmentCount++
+
+				const amt = parseFloat(tx.amount) || 0
+				const bal = parseFloat(tx.balance_after) || 0
+				return {
+					date: tx.created_at ? new Date(tx.created_at).toLocaleString('zh-CN') : '-',
+					type: label,
+					channel: tx.remark || '-',
+					orderNo: tx.transaction_no || '-',
+					amount: Math.abs(amt).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+					balance: bal.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+					status: '已完成'
+				}
+			})
+			summaryData.rechargeCount = rechargeCount
+			summaryData.transferCount = transferCount
+			summaryData.withdrawCount = withdrawCount
+			summaryData.orderPayCount = orderPayCount
+			summaryData.adjustmentCount = adjustmentCount
+		}
+	} catch (e) {
+		console.error('获取预付款流水失败:', e)
+	} finally {
+		loading.value = false
+	}
+}
+
+// 页面初始化
+onMounted(() => {
+	fetchAccount()
+	fetchTransactions()
+})
+
+// ==================== Tab 切换 / 搜索 → 重新调后端 ====================
+watch(activeTab, () => {
+	pagination.page = 1
+	fetchTransactions()
+})
+
+// 关键词搜索仍在前端过滤（实时输入体验更好）
+const filteredList = computed(() => {
+	if (!searchKeyword.value) return prepaymentList.value
+	const keyword = searchKeyword.value.toLowerCase()
+	return prepaymentList.value.filter(item =>
+		item.orderNo.toLowerCase().includes(keyword) ||
+		item.type.toLowerCase().includes(keyword)
+	)
 })
 
 const formatAmount = (value: number) => {
@@ -356,13 +454,16 @@ const formatAmount = (value: number) => {
 	})
 }
 
+// ==================== 充值 ====================
 const rechargeDialogVisible = ref(false)
 const rechargeAmount = ref(0)
 const selectedPayment = ref('')
 const agreeTerms = ref(false)
+const rechargeLoading = ref(false)
 
 const quickAmounts = [500, 1000, 2000, 3000, 4000, 5000, 10000]
 
+// 第三方支付平台（保留原型图 UI，功能暂未开通）
 const paymentMethods = [
 	{ id: 'paypal', name: 'PayPal', icon: 'https://www.paypalobjects.com/webstatic/mktg/Logo/pp-logo-100px.png' },
 	{ id: 'alipay', name: '支付宝', icon: 'https://gw.alipayobjects.com/mdn/rms_0c75a8/afts/img/A*V3ICRJ-4bDcAAAAAAAAAAAAAARQnAQ' },
@@ -381,7 +482,7 @@ const handleRecharge = () => {
 	rechargeDialogVisible.value = true
 }
 
-const confirmRecharge = () => {
+const confirmRecharge = async () => {
 	if (!agreeTerms.value) {
 		ElMessage.warning('请先同意授权协议')
 		return
@@ -394,10 +495,39 @@ const confirmRecharge = () => {
 		ElMessage.warning('请选择支付平台')
 		return
 	}
-	ElMessage.success(`充值 NT$${formatAmount(rechargeAmount.value)} 成功`)
-	rechargeDialogVisible.value = false
+
+	// 第三方支付暂未开通，统一走线下充值申请入库
+	// TODO: 对接第三方支付后，根据 selectedPayment 分发到对应网关
+	// if (['paypal','alipay','linepay','visa','paypal2','alipay2','linepay2','visa2'].includes(selectedPayment.value)) {
+	//     ElMessage.warning('该支付渠道暂未开通，请联系管理员')
+	//     return
+	// }
+
+	rechargeLoading.value = true
+	try {
+		const res = await shopowerFinanceApi.recharge({
+			account_type: 'prepayment',
+			amount: rechargeAmount.value,
+			payment_method: selectedPayment.value,
+			remark: `通过${selectedPayment.value}充值`
+		})
+		if (res.code === 0) {
+			ElMessage.success('预付款充值成功')
+			rechargeDialogVisible.value = false
+			// 刷新账户和流水
+			await fetchAccount()
+			await fetchTransactions()
+		} else {
+			ElMessage.error(res.message || '充值申请失败')
+		}
+	} catch (e: any) {
+		ElMessage.error('充值申请失败: ' + (e?.message || '未知错误'))
+	} finally {
+		rechargeLoading.value = false
+	}
 }
 
+// ==================== 提现 ====================
 const withdrawDialogVisible = ref(false)
 const withdrawAmount = ref(0)
 const selectedWithdrawChannel = ref('')
@@ -434,17 +564,21 @@ const confirmWithdraw = () => {
 		ElMessage.warning('提现金额不能超过余额')
 		return
 	}
+	// TODO: 对接提现 API
 	ElMessage.success(`提现 NT$${formatAmount(withdrawAmount.value)} 申请已提交`)
 	withdrawDialogVisible.value = false
 }
 
+// ==================== 分页 ====================
 const handleSizeChange = (size: number) => {
 	pagination.pageSize = size
 	pagination.page = 1
+	fetchTransactions()
 }
 
 const handlePageChange = (page: number) => {
 	pagination.page = page
+	fetchTransactions()
 }
 </script>
 

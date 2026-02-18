@@ -6,6 +6,13 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// 预付款检查状态
+const (
+	PrepaymentUnchecked    = 0 // 未检查
+	PrepaymentSufficient   = 1 // 预付款充足
+	PrepaymentInsufficient = 2 // 预付款不足
+)
+
 // Order 订单模型（从 Shopee 同步的订单信息，分表）
 type Order struct {
 	ID              uint64          `gorm:"primaryKey;comment:主键ID" json:"id"`
@@ -27,6 +34,24 @@ type Order struct {
 	UpdateTime      *time.Time      `gorm:"comment:Shopee订单更新时间" json:"update_time"`
 	CreatedAt       time.Time       `gorm:"autoCreateTime;comment:记录创建时间" json:"created_at"`
 	UpdatedAt       time.Time       `gorm:"autoUpdateTime;comment:记录更新时间" json:"updated_at"`
+
+	// 预付款费用明细（READY_TO_SHIP 时从 get_escrow_detail 获取）
+	EscrowAmountSnapshot       decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:预估结算金额(get_escrow_detail)" json:"escrow_amount_snapshot"`
+	BuyerPaidShippingFee       decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:买家支付运费" json:"buyer_paid_shipping_fee"`
+	OriginalCostOfGoodsSold    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:商品成本(COGS)" json:"original_cost_of_goods_sold"`
+	CommissionFee              decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:平台佣金" json:"commission_fee"`
+	SellerTransactionFee       decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:卖家交易手续费" json:"seller_transaction_fee"`
+	CreditCardTransactionFee   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:信用卡交易费" json:"credit_card_transaction_fee"`
+	ServiceFee                 decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:服务费" json:"service_fee"`
+	EscrowFeeX                 decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:预留费用X" json:"escrow_fee_x"`
+	EscrowFeeY                 decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:预留费用Y" json:"escrow_fee_y"`
+	EscrowFeeZ                 decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:预留费用Z" json:"escrow_fee_z"`
+
+	// 预付款标记（订单进入 READY_TO_SHIP 时由系统自动检查并标记）
+	PrepaymentAmount    decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:实际预付款扣除金额" json:"prepayment_amount"`
+	PrepaymentStatus    int8            `gorm:"not null;default:0;index;comment:预付款状态(0未检查/1充足/2不足)" json:"prepayment_status"`
+	PrepaymentSnapshot  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:检查时的预付款总余额快照" json:"prepayment_snapshot"`
+	PrepaymentCheckedAt *time.Time      `gorm:"comment:预付款检查时间(即预付款账户的最后更新时间)" json:"prepayment_checked_at"`
 
 	// 关联
 	Items   []OrderItem   `gorm:"foreignKey:OrderID" json:"items,omitempty"`

@@ -106,6 +106,18 @@ func (s *ShardedDB) ShipmentTable(shopID uint64) *gorm.DB {
 	return s.db.Table(GetShipmentTableName(shopID))
 }
 
+// ==================== 退货退款分表（按shop_id % 10）====================
+
+// GetReturnTableName 获取退货退款表名
+func GetReturnTableName(shopID uint64) string {
+	return fmt.Sprintf("returns_%d", GetShardIndex(shopID))
+}
+
+// ReturnTable 获取指定shop_id的退货退款表DB
+func (s *ShardedDB) ReturnTable(shopID uint64) *gorm.DB {
+	return s.db.Table(GetReturnTableName(shopID))
+}
+
 // ==================== 财务收入分表（按shop_id % 10）====================
 
 // GetFinanceIncomeTableName 获取财务收入表名

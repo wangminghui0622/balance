@@ -9,13 +9,77 @@ import (
 
 // Config 全局配置结构
 type Config struct {
-	App    AppConfig    `yaml:"app"`
-	MySQL  MySQLConfig  `yaml:"mysql"`
-	Redis  RedisConfig  `yaml:"redis"`
-	Shopee ShopeeConfig `yaml:"shopee"`
-	Log    LogConfig    `yaml:"log"`
-	JWT    JWTConfig    `yaml:"jwt"`
-	Email  EmailConfig  `yaml:"email"`
+	App     AppConfig     `yaml:"app"`
+	MySQL   MySQLConfig   `yaml:"mysql"`
+	Redis   RedisConfig   `yaml:"redis"`
+	Shopee  ShopeeConfig  `yaml:"shopee"`
+	Log     LogConfig     `yaml:"log"`
+	JWT     JWTConfig     `yaml:"jwt"`
+	Email   EmailConfig   `yaml:"email"`
+	Payment PaymentConfig `yaml:"payment"`
+}
+
+// PaymentConfig 第三方支付配置（预留，待对接时填入真实密钥）
+type PaymentConfig struct {
+	PayPal  PayPalConfig  `yaml:"paypal"`
+	Alipay  AlipayConfig  `yaml:"alipay"`
+	LinePay LinePayConfig `yaml:"linepay"`
+	Visa    VisaConfig    `yaml:"visa"`
+	Wechat  WechatConfig  `yaml:"wechat"`
+}
+
+// PayPalConfig PayPal 配置
+type PayPalConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	Sandbox      bool   `yaml:"sandbox"`
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+	WebhookID    string `yaml:"webhook_id"`
+	ReturnURL    string `yaml:"return_url"`
+	CancelURL    string `yaml:"cancel_url"`
+}
+
+// AlipayConfig 支付宝配置
+type AlipayConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	Sandbox    bool   `yaml:"sandbox"`
+	AppID      string `yaml:"app_id"`
+	PrivateKey string `yaml:"private_key"`
+	PublicKey  string `yaml:"public_key"`
+	NotifyURL  string `yaml:"notify_url"`
+	ReturnURL  string `yaml:"return_url"`
+}
+
+// LinePayConfig LINE Pay 配置
+type LinePayConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	Sandbox       bool   `yaml:"sandbox"`
+	ChannelID     string `yaml:"channel_id"`
+	ChannelSecret string `yaml:"channel_secret"`
+	ReturnURL     string `yaml:"return_url"`
+	CancelURL     string `yaml:"cancel_url"`
+}
+
+// VisaConfig VISA/信用卡支付配置（通过 Stripe/TapPay 等通道）
+type VisaConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	Sandbox   bool   `yaml:"sandbox"`
+	Provider  string `yaml:"provider"` // stripe / tappay / ecpay
+	APIKey    string `yaml:"api_key"`
+	SecretKey string `yaml:"secret_key"`
+	WebhookSecret string `yaml:"webhook_secret"`
+}
+
+// WechatConfig 微信支付配置
+type WechatConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	Sandbox    bool   `yaml:"sandbox"`
+	AppID      string `yaml:"app_id"`
+	MchID      string `yaml:"mch_id"`
+	APIKeyV3   string `yaml:"api_key_v3"`
+	SerialNo   string `yaml:"serial_no"`
+	PrivateKey string `yaml:"private_key"`
+	NotifyURL  string `yaml:"notify_url"`
 }
 
 // EmailConfig 邮件配置

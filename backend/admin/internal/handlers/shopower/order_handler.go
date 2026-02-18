@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"balance/backend/internal/consts"
+	"balance/backend/internal/services"
 	"balance/backend/internal/services/shopower"
 	"balance/backend/internal/utils"
 
@@ -19,7 +20,7 @@ type OrderHandler struct {
 // NewOrderHandler 创建订单处理器
 func NewOrderHandler() *OrderHandler {
 	return &OrderHandler{
-		orderService: shopower.NewOrderService(),
+		orderService: services.NewOrderServiceWithPrepaymentCheck(),
 	}
 }
 

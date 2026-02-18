@@ -820,7 +820,7 @@ Shopee Webhook 推送订单取消
 | POST | /withdraw/apply | 申请提现 |
 | GET | /withdraw/list | 提现申请列表 |
 | **充值** | | |
-| POST | /recharge/apply | 申请充值 |
+| POST | /recharge | 充值 |
 | GET | /recharge/list | 充值申请列表 |
 
 ### 13.2 运营账户路由 (/admin/operator)

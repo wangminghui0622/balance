@@ -1,14 +1,20 @@
+-- ============================================================================
 -- Balance 系统完整数据库建表SQL
--- 生成时间: 2026-02-13
+-- ============================================================================
+-- 生成时间: 2026-02-16
 -- 数据库: MySQL 8.0+
--- 主键说明: 所有主键使用Redis生成的13位分布式ID，不使用自增
--- 分表说明: 订单相关表按 shop_id % 10 分成10个表
+-- 字符集: utf8mb4_unicode_ci
+-- 主键说明: 所有主键使用Redis生成的13位分布式ID，不使用自增（特殊标注的除外）
+-- 分表说明:
+--   - 订单相关表 按 shop_id % 10 分成10个表
+--   - 账户流水表 按 admin_id % 10 分成10个表
+-- ============================================================================
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- ============================================================================
--- 第一部分：基础表（不分表）
+-- 第一部分：基础表（不分表）共 21 张
 -- ============================================================================
 
 -- ----------------------------
@@ -93,8 +99,8 @@ CREATE TABLE `shops` (
   `sync_logistics` tinyint(1) NOT NULL DEFAULT 1 COMMENT '是否同步物流',
   `sync_finance` tinyint(1) NOT NULL DEFAULT 1 COMMENT '是否同步财务',
   `is_primary` tinyint(1) NOT NULL DEFAULT 0 COMMENT '是否主店铺',
-  `last_sync_at` datetime DEFAULT NULL COMMENT '上次同步时间',
-  `next_sync_at` datetime DEFAULT NULL COMMENT '下次同步时间',
+  `last_sync_at` datetime DEFAULT NULL COMMENT '上次同步/巡检时间',
+  `next_sync_at` datetime DEFAULT NULL COMMENT '下次同步/巡检时间',
   `shop_created_at` datetime DEFAULT NULL COMMENT 'Shopee店铺创建时间',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -207,7 +213,7 @@ CREATE TABLE `logistics_channels` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='物流渠道表';
 
 -- ----------------------------
--- 8. 预付款账户表
+-- 8. 预付款账户表（店主发货前预付成本）
 -- ----------------------------
 DROP TABLE IF EXISTS `prepayment_accounts`;
 CREATE TABLE `prepayment_accounts` (
@@ -226,7 +232,7 @@ CREATE TABLE `prepayment_accounts` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='预付款账户表';
 
 -- ----------------------------
--- 10. 保证金账户表
+-- 9. 保证金账户表（店主缴纳的保证金）
 -- ----------------------------
 DROP TABLE IF EXISTS `deposit_accounts`;
 CREATE TABLE `deposit_accounts` (
@@ -243,7 +249,7 @@ CREATE TABLE `deposit_accounts` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='保证金账户表';
 
 -- ----------------------------
--- 11. 运营老板账户表
+-- 10. 运营老板账户表（运营收到的成本+分成）
 -- ----------------------------
 DROP TABLE IF EXISTS `operator_accounts`;
 CREATE TABLE `operator_accounts` (
@@ -262,7 +268,7 @@ CREATE TABLE `operator_accounts` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='运营老板账户表';
 
 -- ----------------------------
--- 12. 店主佣金账户表
+-- 11. 店主佣金账户表（店主利润分成）
 -- ----------------------------
 DROP TABLE IF EXISTS `shop_owner_commission_accounts`;
 CREATE TABLE `shop_owner_commission_accounts` (
@@ -281,7 +287,7 @@ CREATE TABLE `shop_owner_commission_accounts` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='店主佣金账户表';
 
 -- ----------------------------
--- 13. 平台佣金账户表
+-- 12. 平台佣金账户表（平台利润分成，单例记录）
 -- ----------------------------
 DROP TABLE IF EXISTS `platform_commission_accounts`;
 CREATE TABLE `platform_commission_accounts` (
@@ -298,12 +304,12 @@ CREATE TABLE `platform_commission_accounts` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='平台佣金账户表';
 
 -- ----------------------------
--- 14. 罚补账户表
+-- 13. 罚补账户表（运营罚款和补贴）
 -- ----------------------------
 DROP TABLE IF EXISTS `penalty_bonus_accounts`;
 CREATE TABLE `penalty_bonus_accounts` (
-  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `admin_id` bigint NOT NULL COMMENT '用户ID',
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID(自增)',
+  `admin_id` bigint NOT NULL COMMENT '用户ID(关联admin表)',
   `balance` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '余额(正=待付罚款,负=待发补贴)',
   `total_penalty` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计罚款金额',
   `total_bonus` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计补贴金额',
@@ -316,12 +322,12 @@ CREATE TABLE `penalty_bonus_accounts` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='罚补账户表';
 
 -- ----------------------------
--- 15. 托管账户表
+-- 14. 托管账户表（临时托管店主预付款，待结算时分账）
 -- ----------------------------
 DROP TABLE IF EXISTS `escrow_accounts`;
 CREATE TABLE `escrow_accounts` (
-  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `admin_id` bigint NOT NULL COMMENT '用户ID(店主)',
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID(自增)',
+  `admin_id` bigint NOT NULL COMMENT '用户ID(店主,关联admin表)',
   `balance` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '托管余额',
   `total_in` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计转入金额',
   `total_out` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计转出金额',
@@ -334,7 +340,7 @@ CREATE TABLE `escrow_accounts` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='托管账户表';
 
 -- ----------------------------
--- 15. 收款账户表
+-- 15. 收款账户表（用户绑定的银行卡/电子钱包）
 -- ----------------------------
 DROP TABLE IF EXISTS `collection_accounts`;
 CREATE TABLE `collection_accounts` (
@@ -355,7 +361,7 @@ CREATE TABLE `collection_accounts` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='收款账户表';
 
 -- ----------------------------
--- 18. 提现申请表
+-- 16. 提现申请表
 -- ----------------------------
 DROP TABLE IF EXISTS `withdraw_applications`;
 CREATE TABLE `withdraw_applications` (
@@ -385,10 +391,10 @@ CREATE TABLE `withdraw_applications` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='提现申请表';
 
 -- ----------------------------
--- 19. 充值申请表
+-- 17. 充值记录表（预付款/保证金充值，无需审核直接入账）
 -- ----------------------------
-DROP TABLE IF EXISTS `recharge_applications`;
-CREATE TABLE `recharge_applications` (
+DROP TABLE IF EXISTS `recharge_record`;
+CREATE TABLE `recharge_record` (
   `id` bigint unsigned NOT NULL COMMENT '主键ID(Redis分布式ID)',
   `application_no` varchar(64) NOT NULL COMMENT '申请单号(唯一)',
   `admin_id` bigint NOT NULL COMMENT '申请人ID(关联admin表)',
@@ -410,15 +416,101 @@ CREATE TABLE `recharge_applications` (
   KEY `idx_account_type` (`account_type`),
   KEY `idx_status` (`status`),
   KEY `idx_created_at` (`created_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='充值申请表';
-
--- ============================================================================
--- 第二部分：分表（按 shop_id % 10 分成10个表）
--- 分表规则: table_name = base_name + "_" + (shop_id % 10)
--- ============================================================================
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='充值记录表';
 
 -- ----------------------------
--- 订单表分表 (orders_0 ~ orders_9)
+-- 18. 站内消息通知表
+-- ----------------------------
+DROP TABLE IF EXISTS `notifications`;
+CREATE TABLE `notifications` (
+  `id` bigint unsigned NOT NULL COMMENT '主键ID(Redis分布式ID)',
+  `admin_id` bigint NOT NULL COMMENT '接收人ID(店铺老板,关联admin表)',
+  `shop_id` bigint unsigned NOT NULL COMMENT '关联店铺ID',
+  `order_sn` varchar(64) NOT NULL DEFAULT '' COMMENT '关联订单号',
+  `type` varchar(30) NOT NULL COMMENT '消息类型: prepayment_low=预付款不足',
+  `title` varchar(200) NOT NULL COMMENT '消息标题',
+  `content` text NOT NULL COMMENT '消息内容',
+  `is_read` tinyint(1) NOT NULL DEFAULT 0 COMMENT '是否已读: 0=未读 1=已读',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_admin_id` (`admin_id`),
+  KEY `idx_shop_id` (`shop_id`),
+  KEY `idx_order_sn` (`order_sn`),
+  KEY `idx_type` (`type`),
+  KEY `idx_is_read` (`is_read`),
+  KEY `idx_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='站内消息通知表';
+
+-- ----------------------------
+-- 19. 订单每日统计表（按店铺汇总）
+-- ----------------------------
+DROP TABLE IF EXISTS `order_daily_stats`;
+CREATE TABLE `order_daily_stats` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID(自增)',
+  `stat_date` date NOT NULL COMMENT '统计日期',
+  `shop_id` bigint unsigned NOT NULL COMMENT '店铺ID',
+  `order_count` bigint NOT NULL DEFAULT 0 COMMENT '订单数量',
+  `total_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '订单总金额',
+  `shipped_count` bigint NOT NULL DEFAULT 0 COMMENT '已发货数量',
+  `settled_count` bigint NOT NULL DEFAULT 0 COMMENT '已结算数量',
+  `settled_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '结算金额',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_stat_shop` (`stat_date`, `shop_id`),
+  KEY `idx_shop_id` (`shop_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单每日统计表';
+
+-- ----------------------------
+-- 20. 财务每日统计表（按店铺汇总）
+-- ----------------------------
+DROP TABLE IF EXISTS `finance_daily_stats`;
+CREATE TABLE `finance_daily_stats` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID(自增)',
+  `stat_date` date NOT NULL COMMENT '统计日期',
+  `shop_id` bigint unsigned NOT NULL COMMENT '店铺ID',
+  `income_count` bigint NOT NULL DEFAULT 0 COMMENT '收入笔数',
+  `income_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '收入金额',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_stat_shop` (`stat_date`, `shop_id`),
+  KEY `idx_shop_id` (`shop_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='财务每日统计表';
+
+-- ----------------------------
+-- 21. 平台每日统计表（全平台汇总）
+-- ----------------------------
+DROP TABLE IF EXISTS `platform_daily_stats`;
+CREATE TABLE `platform_daily_stats` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID(自增)',
+  `stat_date` date NOT NULL COMMENT '统计日期',
+  `total_orders` bigint NOT NULL DEFAULT 0 COMMENT '总订单数',
+  `total_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '总订单金额',
+  `settled_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '总结算金额',
+  `platform_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '平台分成',
+  `total_income` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '总收入',
+  `active_shops` bigint NOT NULL DEFAULT 0 COMMENT '活跃店铺数',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_stat_date` (`stat_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='平台每日统计表';
+
+
+-- ============================================================================
+-- 第二部分：分表（使用存储过程批量创建）
+-- ============================================================================
+-- 分表路由规则:
+--   按 shop_id % 10 分表的表: orders, order_items, order_addresses, order_escrows,
+--     order_escrow_items, order_settlements, order_shipment_records, shipments,
+--     finance_incomes, operation_logs, operation_logs_archive, returns (共12种×10=120张)
+--   按 admin_id % 10 分表的表: account_transactions (1种×10=10张)
+
+
+-- ----------------------------
+-- 1. 订单表分表 (orders_0 ~ orders_9)
+-- 分表键: shop_id % 10
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_orders_shards;
 DELIMITER //
@@ -436,8 +528,8 @@ BEGIN
           `shop_id` bigint unsigned NOT NULL COMMENT ''Shopee店铺ID'',
           `order_sn` varchar(64) NOT NULL COMMENT ''订单编号'',
           `region` varchar(10) NOT NULL COMMENT ''地区代码'',
-          `order_status` varchar(50) NOT NULL COMMENT ''订单状态'',
-          `status_locked` tinyint(1) NOT NULL DEFAULT 0 COMMENT ''状态是否锁定'',
+          `order_status` varchar(50) NOT NULL COMMENT ''订单状态(UNPAID/READY_TO_SHIP/SHIPPED/COMPLETED等)'',
+          `status_locked` tinyint(1) NOT NULL DEFAULT 0 COMMENT ''状态是否被锁定(锁定后不允许回退)'',
           `status_remark` varchar(255) NOT NULL DEFAULT '''' COMMENT ''状态备注'',
           `buyer_user_id` bigint unsigned NOT NULL DEFAULT 0 COMMENT ''买家用户ID'',
           `buyer_username` varchar(255) NOT NULL DEFAULT '''' COMMENT ''买家用户名'',
@@ -449,14 +541,29 @@ BEGIN
           `pay_time` datetime DEFAULT NULL COMMENT ''支付时间'',
           `create_time` datetime DEFAULT NULL COMMENT ''Shopee订单创建时间'',
           `update_time` datetime DEFAULT NULL COMMENT ''Shopee订单更新时间'',
-          `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT ''创建时间'',
-          `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT ''更新时间'',
+          `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT ''记录创建时间'',
+          `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT ''记录更新时间'',
+          `escrow_amount_snapshot` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''READY_TO_SHIP时获取的预估结算金额(get_escrow_detail)'',
+          `buyer_paid_shipping_fee` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''买家支付运费'',
+          `original_cost_of_goods_sold` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''商品成本(COGS)'',
+          `commission_fee` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''平台佣金'',
+          `seller_transaction_fee` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''卖家交易手续费'',
+          `credit_card_transaction_fee` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''信用卡交易费'',
+          `service_fee` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''服务费'',
+          `escrow_fee_x` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''预留费用X'',
+          `escrow_fee_y` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''预留费用Y'',
+          `escrow_fee_z` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''预留费用Z'',
+          `prepayment_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''实际预付款扣除金额(=escrow_amount_snapshot)'',
+          `prepayment_status` tinyint NOT NULL DEFAULT 0 COMMENT ''预付款状态: 0=未检查 1=充足(已冻结) 2=不足'',
+          `prepayment_snapshot` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''检查时预付款总余额快照'',
+          `prepayment_checked_at` datetime DEFAULT NULL COMMENT ''预付款检查时间'',
           PRIMARY KEY (`id`),
           UNIQUE KEY `uk_shop_order` (`shop_id`, `order_sn`),
           KEY `idx_order_sn` (`order_sn`),
           KEY `idx_order_status` (`order_status`),
           KEY `idx_ship_by_date` (`ship_by_date`),
-          KEY `idx_create_time` (`create_time`)
+          KEY `idx_create_time` (`create_time`),
+          KEY `idx_prepayment_status` (`prepayment_status`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT=''订单表分表', i, '''');
         PREPARE create_stmt FROM @create_sql;
         EXECUTE create_stmt;
@@ -470,7 +577,8 @@ CALL create_orders_shards();
 DROP PROCEDURE IF EXISTS create_orders_shards;
 
 -- ----------------------------
--- 订单商品表分表 (order_items_0 ~ order_items_9)
+-- 2. 订单商品表分表 (order_items_0 ~ order_items_9)
+-- 分表键: shop_id % 10
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_order_items_shards;
 DELIMITER //
@@ -515,7 +623,8 @@ CALL create_order_items_shards();
 DROP PROCEDURE IF EXISTS create_order_items_shards;
 
 -- ----------------------------
--- 订单地址表分表 (order_addresses_0 ~ order_addresses_9)
+-- 3. 订单地址表分表 (order_addresses_0 ~ order_addresses_9)
+-- 分表键: shop_id % 10
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_order_addresses_shards;
 DELIMITER //
@@ -560,7 +669,8 @@ CALL create_order_addresses_shards();
 DROP PROCEDURE IF EXISTS create_order_addresses_shards;
 
 -- ----------------------------
--- 订单结算表分表 (order_escrows_0 ~ order_escrows_9)
+-- 4. 订单结算表分表 (order_escrows_0 ~ order_escrows_9)
+-- 分表键: shop_id % 10
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_order_escrows_shards;
 DELIMITER //
@@ -632,7 +742,8 @@ CALL create_order_escrows_shards();
 DROP PROCEDURE IF EXISTS create_order_escrows_shards;
 
 -- ----------------------------
--- 订单结算商品表分表 (order_escrow_items_0 ~ order_escrow_items_9)
+-- 5. 订单结算商品表分表 (order_escrow_items_0 ~ order_escrow_items_9)
+-- 分表键: shop_id % 10
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_order_escrow_items_shards;
 DELIMITER //
@@ -687,7 +798,8 @@ CALL create_order_escrow_items_shards();
 DROP PROCEDURE IF EXISTS create_order_escrow_items_shards;
 
 -- ----------------------------
--- 订单结算记录表分表 (order_settlements_0 ~ order_settlements_9)
+-- 6. 订单结算记录表分表 (order_settlements_0 ~ order_settlements_9)
+-- 分表键: shop_id % 10
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_order_settlements_shards;
 DELIMITER //
@@ -747,7 +859,8 @@ CALL create_order_settlements_shards();
 DROP PROCEDURE IF EXISTS create_order_settlements_shards;
 
 -- ----------------------------
--- 订单发货记录表分表 (order_shipment_records_0 ~ order_shipment_records_9)
+-- 7. 订单发货记录表分表 (order_shipment_records_0 ~ order_shipment_records_9)
+-- 分表键: shop_id % 10
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_order_shipment_records_shards;
 DELIMITER //
@@ -801,7 +914,8 @@ CALL create_order_shipment_records_shards();
 DROP PROCEDURE IF EXISTS create_order_shipment_records_shards;
 
 -- ----------------------------
--- 发货记录表分表 (shipments_0 ~ shipments_9)
+-- 8. 发货记录表分表 (shipments_0 ~ shipments_9)
+-- 分表键: shop_id % 10
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_shipments_shards;
 DELIMITER //
@@ -843,7 +957,8 @@ CALL create_shipments_shards();
 DROP PROCEDURE IF EXISTS create_shipments_shards;
 
 -- ----------------------------
--- 财务收入表分表 (finance_incomes_0 ~ finance_incomes_9)
+-- 9. 财务收入表分表 (finance_incomes_0 ~ finance_incomes_9)
+-- 分表键: shop_id % 10
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_finance_incomes_shards;
 DELIMITER //
@@ -898,8 +1013,8 @@ CALL create_finance_incomes_shards();
 DROP PROCEDURE IF EXISTS create_finance_incomes_shards;
 
 -- ----------------------------
--- 账户流水表分表 (account_transactions_0 ~ account_transactions_9)
--- 注意：按 admin_id % 10 分表
+-- 10. 账户流水表分表 (account_transactions_0 ~ account_transactions_9)
+-- 分表键: admin_id % 10（注意：与其他分表不同，按用户ID分表）
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_account_transactions_shards;
 DELIMITER //
@@ -948,7 +1063,8 @@ CALL create_account_transactions_shards();
 DROP PROCEDURE IF EXISTS create_account_transactions_shards;
 
 -- ----------------------------
--- 操作日志表分表 (operation_logs_0 ~ operation_logs_9)
+-- 11. 操作日志表分表 (operation_logs_0 ~ operation_logs_9)
+-- 分表键: shop_id % 10
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_operation_logs_shards;
 DELIMITER //
@@ -990,15 +1106,22 @@ CALL create_operation_logs_shards();
 DROP PROCEDURE IF EXISTS create_operation_logs_shards;
 
 -- ----------------------------
--- 操作日志归档分表 (operation_logs_archive_0 ~ operation_logs_archive_9)
+-- 12. 操作日志归档表分表 (operation_logs_archive_0 ~ operation_logs_archive_9)
+-- 分表键: shop_id % 10
+-- 用途: 90天前的操作日志自动归档到此表，365天后自动清理
 -- ----------------------------
+DROP PROCEDURE IF EXISTS create_operation_logs_archive_shards;
 DELIMITER //
 CREATE PROCEDURE create_operation_logs_archive_shards()
 BEGIN
     DECLARE i INT DEFAULT 0;
     WHILE i < 10 DO
-        SET @create_sql = CONCAT('
-        CREATE TABLE IF NOT EXISTS `operation_logs_archive_', i, '` (
+        SET @drop_sql = CONCAT('DROP TABLE IF EXISTS `operation_logs_archive_', i, '`');
+        PREPARE drop_stmt FROM @drop_sql;
+        EXECUTE drop_stmt;
+        DEALLOCATE PREPARE drop_stmt;
+
+        SET @create_sql = CONCAT('CREATE TABLE `operation_logs_archive_', i, '` (
           `id` bigint NOT NULL COMMENT ''主键ID'',
           `shop_id` bigint unsigned NOT NULL DEFAULT 0 COMMENT ''店铺ID'',
           `order_sn` varchar(64) NOT NULL DEFAULT '''' COMMENT ''订单号'',
@@ -1024,116 +1147,135 @@ DELIMITER ;
 CALL create_operation_logs_archive_shards();
 DROP PROCEDURE IF EXISTS create_operation_logs_archive_shards;
 
+
 -- ----------------------------
--- 统计汇总表（不分表）
+-- 13. 退货退款表分表 (returns_0 ~ returns_9)
+-- 分表键: shop_id % 10
+-- 说明: 记录从 Shopee 同步的退货退款信息，退款确认后自动解冻预付款
 -- ----------------------------
+DROP PROCEDURE IF EXISTS create_returns_shards;
+DELIMITER //
+CREATE PROCEDURE create_returns_shards()
+BEGIN
+    DECLARE i INT DEFAULT 0;
+    WHILE i < 10 DO
+        SET @drop_sql = CONCAT('DROP TABLE IF EXISTS `returns_', i, '`');
+        PREPARE drop_stmt FROM @drop_sql;
+        EXECUTE drop_stmt;
+        DEALLOCATE PREPARE drop_stmt;
+        
+        SET @create_sql = CONCAT('CREATE TABLE `returns_', i, '` (
+          `id` bigint unsigned NOT NULL COMMENT ''主键ID(Redis分布式ID)'',
+          `shop_id` bigint unsigned NOT NULL COMMENT ''Shopee店铺ID'',
+          `return_sn` varchar(64) NOT NULL COMMENT ''退货单号'',
+          `order_sn` varchar(64) NOT NULL COMMENT ''关联订单号'',
+          `reason` varchar(100) NOT NULL DEFAULT '''' COMMENT ''退货原因(Shopee枚举值)'',
+          `text_reason` varchar(500) NOT NULL DEFAULT '''' COMMENT ''买家退货说明'',
+          `refund_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''退款金额'',
+          `amount_before_disc` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''折扣前金额'',
+          `currency` varchar(10) NOT NULL DEFAULT '''' COMMENT ''币种'',
+          `status` varchar(50) NOT NULL COMMENT ''退货状态(REQUESTED/ACCEPTED/CANCELLED/REFUND_PAID等)'',
+          `needs_logistics` tinyint(1) NOT NULL DEFAULT 0 COMMENT ''是否需要退回商品'',
+          `tracking_number` varchar(100) NOT NULL DEFAULT '''' COMMENT ''退货物流单号'',
+          `logistics_status` varchar(50) NOT NULL DEFAULT '''' COMMENT ''退货物流状态'',
+          `buyer_username` varchar(255) NOT NULL DEFAULT '''' COMMENT ''买家用户名'',
+          `shopee_create_time` datetime DEFAULT NULL COMMENT ''Shopee退货创建时间'',
+          `shopee_update_time` datetime DEFAULT NULL COMMENT ''Shopee退货更新时间'',
+          `due_date` datetime DEFAULT NULL COMMENT ''卖家处理截止时间'',
+          `refund_status` tinyint NOT NULL DEFAULT 0 COMMENT ''退款处理状态(0未处理/1已解冻预付款/2跳过/3处理中/4处理失败)'',
+          `refund_processed_at` datetime DEFAULT NULL COMMENT ''退款处理时间'',
+          `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT ''记录创建时间'',
+          `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT ''记录更新时间'',
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uk_shop_return` (`shop_id`, `return_sn`),
+          KEY `idx_order_sn` (`order_sn`),
+          KEY `idx_status` (`status`),
+          KEY `idx_refund_status` (`refund_status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT=''退货退款表(分表', i, ')''');
+        PREPARE create_stmt FROM @create_sql;
+        EXECUTE create_stmt;
+        DEALLOCATE PREPARE create_stmt;
+        SET i = i + 1;
+    END WHILE;
+END //
+DELIMITER ;
+CALL create_returns_shards();
+DROP PROCEDURE IF EXISTS create_returns_shards;
 
--- 订单每日统计（按店铺）
-DROP TABLE IF EXISTS `order_daily_stats`;
-CREATE TABLE `order_daily_stats` (
-  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
-  `stat_date` date NOT NULL COMMENT '统计日期',
-  `shop_id` bigint unsigned NOT NULL COMMENT '店铺ID',
-  `order_count` bigint NOT NULL DEFAULT 0 COMMENT '订单数量',
-  `total_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '订单总金额',
-  `shipped_count` bigint NOT NULL DEFAULT 0 COMMENT '已发货数量',
-  `settled_count` bigint NOT NULL DEFAULT 0 COMMENT '已结算数量',
-  `settled_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '结算金额',
-  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_stat_shop` (`stat_date`, `shop_id`),
-  KEY `idx_shop_id` (`shop_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单每日统计表';
-
--- 财务每日统计（按店铺）
-DROP TABLE IF EXISTS `finance_daily_stats`;
-CREATE TABLE `finance_daily_stats` (
-  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
-  `stat_date` date NOT NULL COMMENT '统计日期',
-  `shop_id` bigint unsigned NOT NULL COMMENT '店铺ID',
-  `income_count` bigint NOT NULL DEFAULT 0 COMMENT '收入笔数',
-  `income_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '收入金额',
-  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_stat_shop` (`stat_date`, `shop_id`),
-  KEY `idx_shop_id` (`shop_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='财务每日统计表';
-
--- 平台每日统计（汇总）
-DROP TABLE IF EXISTS `platform_daily_stats`;
-CREATE TABLE `platform_daily_stats` (
-  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
-  `stat_date` date NOT NULL COMMENT '统计日期',
-  `total_orders` bigint NOT NULL DEFAULT 0 COMMENT '总订单数',
-  `total_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '总订单金额',
-  `settled_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '总结算金额',
-  `platform_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '平台分成',
-  `total_income` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '总收入',
-  `active_shops` bigint NOT NULL DEFAULT 0 COMMENT '活跃店铺数',
-  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_stat_date` (`stat_date`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='平台每日统计表';
 
 -- ============================================================================
 -- 第三部分：初始化数据
 -- ============================================================================
 
+-- 平台佣金账户（单例记录，固定ID=1）
 INSERT INTO `platform_commission_accounts` (`id`, `balance`, `frozen_amount`, `total_earnings`, `total_withdrawn`, `currency`, `status`) 
 VALUES (1, 0.00, 0.00, 0.00, 0.00, 'TWD', 1);
 
--- penalty_bonus_accounts 不再是单例表，按需创建用户记录
--- escrow_accounts 不再是单例表，按需创建用户记录
-
 SET FOREIGN_KEY_CHECKS = 1;
 
+
 -- ============================================================================
--- 使用说明
+-- 附录：表清单与分表规则说明
 -- ============================================================================
--- 分表路由规则:
---   - 订单相关表: table_name = base_name + "_" + (shop_id % 10)
---   - 账户流水表: table_name = "account_transactions_" + (admin_id % 10)
--- 
--- 示例:
---   shop_id = 12345 -> 12345 % 10 = 5 -> orders_5, finance_incomes_5, ...
---   admin_id = 67890 -> 67890 % 10 = 0 -> account_transactions_0
 --
--- 分表列表 (共12种 × 10个 = 120个分表):
+-- 一、基础表（不分表）共 21 张:
+--   序号  表名                             说明
+--   1     admin                            管理员/用户表
+--   2     shops                            店铺表
+--   3     shop_authorizations              店铺授权表
+--   4     shop_operator_relations          店铺-运营分配关系表
+--   5     shop_sync_records                店铺同步记录表
+--   6     profit_share_configs             利润分成配置表
+--   7     logistics_channels               物流渠道表
+--   8     prepayment_accounts              预付款账户表
+--   9     deposit_accounts                 保证金账户表
+--   10    operator_accounts                运营老板账户表
+--   11    shop_owner_commission_accounts   店主佣金账户表
+--   12    platform_commission_accounts     平台佣金账户表(单例)
+--   13    penalty_bonus_accounts           罚补账户表
+--   14    escrow_accounts                  托管账户表
+--   15    collection_accounts              收款账户表
+--   16    withdraw_applications            提现申请表
+--   17    recharge_record                  充值记录表
+--   18    notifications                    站内消息通知表
+--   19    order_daily_stats                订单每日统计表
+--   20    finance_daily_stats              财务每日统计表
+--   21    platform_daily_stats             平台每日统计表
 --
---   按 shop_id % 10 分表（业务表）:
---   - orders_0 ~ orders_9
---   - order_items_0 ~ order_items_9
---   - order_addresses_0 ~ order_addresses_9
---   - order_escrows_0 ~ order_escrows_9
---   - order_escrow_items_0 ~ order_escrow_items_9
---   - order_settlements_0 ~ order_settlements_9
---   - order_shipment_records_0 ~ order_shipment_records_9
---   - shipments_0 ~ shipments_9
---   - finance_incomes_0 ~ finance_incomes_9
---   - operation_logs_0 ~ operation_logs_9
+-- 二、分表（共 13 种基础表 × 10 个分片 = 130 张）:
 --
---   按 shop_id % 10 分表（归档表）:
---   - operation_logs_archive_0 ~ operation_logs_archive_9
+--   按 shop_id % 10 分表（12种 × 10 = 120张）:
+--   1     orders_0 ~ orders_9                             订单表
+--   2     order_items_0 ~ order_items_9                   订单商品表
+--   3     order_addresses_0 ~ order_addresses_9           订单地址表
+--   4     order_escrows_0 ~ order_escrows_9               订单结算表
+--   5     order_escrow_items_0 ~ order_escrow_items_9     订单结算商品表
+--   6     order_settlements_0 ~ order_settlements_9       订单结算记录表
+--   7     order_shipment_records_0 ~ order_shipment_records_9  订单发货记录表
+--   8     shipments_0 ~ shipments_9                       发货记录表
+--   9     finance_incomes_0 ~ finance_incomes_9           财务收入表
+--   10    operation_logs_0 ~ operation_logs_9             操作日志表
+--   11    operation_logs_archive_0 ~ operation_logs_archive_9  操作日志归档表
+--   12    returns_0 ~ returns_9                           退货退款表
 --
---   按 admin_id % 10 分表:
---   - account_transactions_0 ~ account_transactions_9
+--   按 admin_id % 10 分表（1种 × 10 = 10张）:
+--   13    account_transactions_0 ~ account_transactions_9  账户流水表
 --
--- 统计汇总表（不分表，用于平台级查询优化）:
---   - order_daily_stats      订单每日统计（按店铺）
---   - finance_daily_stats    财务每日统计（按店铺）
---   - platform_daily_stats   平台每日统计（汇总）
+-- 三、总计物理表数量: 21 + 130 = 151 张
 --
--- 维护任务:
---   - 每天凌晨2点: 归档90天前的操作日志到 operation_logs_archive_X
---   - 每天凌晨3点: 生成前一天的统计数据
---   - 每月1号凌晨4点: 清理365天前的归档数据
+-- 四、分表路由示例:
+--   shop_id  = 12345 → 12345 % 10 = 5 → orders_5, order_items_5, ...
+--   admin_id = 67890 → 67890 % 10 = 0 → account_transactions_0
 --
--- 注意事项:
---   1. 同一店铺的所有订单数据都在同一组分表中
---   2. 跨店铺查询需要遍历所有分表
---   3. 建议在应用层使用 ShardedDB 工具类进行分表路由
+-- 五、定时维护任务:
+--   每天凌晨 2:00  归档90天前的操作日志到 operation_logs_archive_X
+--   每天凌晨 3:00  生成前一天的统计数据（order_daily_stats / finance_daily_stats / platform_daily_stats）
+--   每月1号  4:00  清理365天前的归档数据
+--
+-- 六、注意事项:
+--   1. 同一店铺的所有订单数据都在同一组分表中，保证关联查询高效
+--   2. 跨店铺查询需要遍历所有分表（建议优先使用汇总统计表）
+--   3. 应用层使用 database.ShardedDB 工具类进行分表路由
 --   4. account_transactions 按 admin_id 分表，同一用户的流水在同一表中
 --   5. 平台级统计查询优先使用汇总表，避免遍历分表
+--   6. 充值（预付款/保证金）无需审核，直接入账；仅提现需要审核流程

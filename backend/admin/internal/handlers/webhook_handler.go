@@ -54,7 +54,6 @@ type TrackingData struct {
 // @Success 200 {object} map[string]interface{}
 // @Router /webhook [post]
 func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
-	fmt.Println("*********************************这里是webhook事件*************************************************")
 	var req WebhookRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		// Webhook需要快速返回200，否则虾皮会重试
@@ -68,8 +67,14 @@ func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "received"})
 }
 
-// processWebhook 异步处理Webhook
+// processWebhook 异步处理Webhook（带 panic recovery，防止单个 webhook 崩溃整个进程）
 func (h *WebhookHandler) processWebhook(req WebhookRequest) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("[Webhook] panic recovered: shopID=%d code=%d panic=%v\n", req.ShopID, req.Code, r)
+		}
+	}()
+
 	ctx, cancel := services.NewBackgroundContext()
 	defer cancel()
 
@@ -80,7 +85,6 @@ func (h *WebhookHandler) processWebhook(req WebhookRequest) {
 
 	case consts.WebhookOrderStatus:
 		// 订单状态更新
-		fmt.Println("****************订单状态变更:**************************",req.ShopID,"****************",req.Data)
 		h.webhookService.HandleOrderStatusUpdate(ctx, req.ShopID, req.Data, req.Timestamp)
 
 	case consts.WebhookTrackingUpdate:
@@ -90,6 +94,10 @@ func (h *WebhookHandler) processWebhook(req WebhookRequest) {
 	case consts.WebhookBuyerCancelOrder:
 		// 买家/卖家取消订单
 		h.webhookService.HandleOrderCancel(ctx, req.ShopID, req.Data, req.Timestamp)
+
+	case consts.WebhookReturnCreated, consts.WebhookReturnStatusChange:
+		// 退货退款创建 / 退货退款状态变更
+		h.webhookService.HandleReturn(ctx, req.ShopID, req.Data, req.Timestamp, req.Code)
 
 	case consts.WebhookBannedItem:
 		// 商品禁止销售
