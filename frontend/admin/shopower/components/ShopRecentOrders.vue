@@ -48,6 +48,16 @@
               </div>
             </div>
           </div>
+          <el-button
+            v-if="showLoadMore()"
+            type="primary"
+            link
+            :loading="loading"
+            class="load-more-btn"
+            @click="handleLoadMore"
+          >
+            加载更多
+          </el-button>
         </div>
       </el-tab-pane>
       <el-tab-pane label="未结算" name="unsettled">
@@ -97,6 +107,16 @@
               </div>
             </div>
           </div>
+          <el-button
+            v-if="showLoadMore()"
+            type="primary"
+            link
+            :loading="loading"
+            class="load-more-btn"
+            @click="handleLoadMore"
+          >
+            加载更多
+          </el-button>
         </div>
       </el-tab-pane>
       <el-tab-pane label="已结算" name="settled">
@@ -142,6 +162,16 @@
               </div>
             </div>
           </div>
+          <el-button
+            v-if="showLoadMore()"
+            type="primary"
+            link
+            :loading="loading"
+            class="load-more-btn"
+            @click="handleLoadMore"
+          >
+            加载更多
+          </el-button>
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -187,8 +217,11 @@ interface Order {
   settledPayment?: string
 }
 
+const PAGE_SIZE = 10
 const activeTab = ref('recent')
 const loading = ref(false)
+const page = ref(1)
+const total = ref(0)
 
 // 格式化时间：将 ISO 8601 格式转换为 YYYY-MM-DD HH:mm:ss
 const formatDateTime = (isoString: string | null): string => {
@@ -251,14 +284,13 @@ const transformOrder = (apiOrder: ApiOrder): Order => {
 
 // 计算属性：最近订单（所有订单）
 const recentOrders = computed(() => {
-  return apiOrders.value.slice(0, 5).map(transformOrder)
+  return apiOrders.value.map(transformOrder)
 })
 
 // 计算属性：未结算订单（待发货状态）
 const unsettledOrders = computed(() => {
   return apiOrders.value
     .filter(o => ['READY_TO_SHIP', 'PROCESSED', 'SHIPPED'].includes(o.order_status))
-    .slice(0, 5)
     .map(transformOrder)
 })
 
@@ -266,17 +298,25 @@ const unsettledOrders = computed(() => {
 const settledOrders = computed(() => {
   return apiOrders.value
     .filter(o => o.order_status === 'COMPLETED')
-    .slice(0, 5)
     .map(transformOrder)
 })
 
-// 获取订单列表
-const fetchOrders = async () => {
+// 获取订单列表（首次加载或加载更多）
+const fetchOrders = async (isLoadMore = false) => {
   loading.value = true
   try {
-    const res = await orderApi.getOrderList({ page: 1, page_size: 20 })
-    if (res.code === HTTP_STATUS.OK && res.data?.list) {
-      apiOrders.value = res.data.list
+    const res = await orderApi.getOrderList({
+      page: page.value,
+      page_size: PAGE_SIZE
+    })
+    if (res.code === HTTP_STATUS.OK && res.data) {
+      total.value = res.data.total ?? 0
+      const list = res.data.list || []
+      if (isLoadMore) {
+        apiOrders.value = [...apiOrders.value, ...list]
+      } else {
+        apiOrders.value = list
+      }
     }
   } catch (err: any) {
     console.error('获取订单列表失败:', err)
@@ -286,8 +326,19 @@ const fetchOrders = async () => {
   }
 }
 
+// 是否显示加载更多（还有更多订单可加载时显示）
+const showLoadMore = () => {
+  return apiOrders.value.length < total.value
+}
+
+// 加载更多
+const handleLoadMore = async () => {
+  page.value += 1
+  await fetchOrders(true)
+}
+
 onMounted(() => {
-  fetchOrders()
+  fetchOrders(false)
 })
 </script>
 
@@ -354,6 +405,13 @@ onMounted(() => {
   gap: 20px;
   max-height: 600px;
   overflow-y: auto;
+}
+
+.load-more-btn {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  text-align: center;
 }
 
 .order-item {
