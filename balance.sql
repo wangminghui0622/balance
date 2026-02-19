@@ -152,13 +152,12 @@ CREATE TABLE `shop_operator_relations` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='店铺-运营分配关系表';
 
 -- ----------------------------
--- 5. 店铺同步记录表
+-- 5. 店铺同步记录表（按类型拆分为独立表，便于多机部署时并发安全）
 -- ----------------------------
-DROP TABLE IF EXISTS `shop_sync_records`;
-CREATE TABLE `shop_sync_records` (
+DROP TABLE IF EXISTS `shop_sync_finance_income_records`;
+CREATE TABLE `shop_sync_finance_income_records` (
   `id` bigint unsigned NOT NULL COMMENT '主键ID(Redis分布式ID)',
   `shop_id` bigint unsigned NOT NULL COMMENT 'Shopee店铺ID',
-  `sync_type` varchar(50) NOT NULL COMMENT '同步类型: finance_income/order/escrow',
   `last_sync_time` bigint NOT NULL DEFAULT 0 COMMENT '上次同步时间戳',
   `last_transaction_id` bigint NOT NULL DEFAULT 0 COMMENT '上次同步的交易ID',
   `last_sync_at` datetime DEFAULT NULL COMMENT '上次同步时间',
@@ -170,8 +169,42 @@ CREATE TABLE `shop_sync_records` (
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_shop_sync_type` (`shop_id`, `sync_type`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='店铺同步记录表';
+  UNIQUE KEY `uk_shop_id` (`shop_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='店铺财务收入同步记录表';
+
+DROP TABLE IF EXISTS `shop_sync_order_records`;
+CREATE TABLE `shop_sync_order_records` (
+  `id` bigint unsigned NOT NULL COMMENT '主键ID(Redis分布式ID)',
+  `shop_id` bigint unsigned NOT NULL COMMENT 'Shopee店铺ID',
+  `last_sync_time` bigint NOT NULL DEFAULT 0 COMMENT '上次同步时间戳',
+  `last_sync_at` datetime DEFAULT NULL COMMENT '上次同步时间',
+  `total_synced_count` bigint NOT NULL DEFAULT 0 COMMENT '累计同步数量',
+  `last_sync_count` int NOT NULL DEFAULT 0 COMMENT '上次同步数量',
+  `last_error` varchar(500) NOT NULL DEFAULT '' COMMENT '上次错误信息',
+  `consecutive_fail_count` int NOT NULL DEFAULT 0 COMMENT '连续失败次数',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 0=禁用 1=启用 2=暂停',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_shop_id` (`shop_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='店铺订单同步记录表';
+
+DROP TABLE IF EXISTS `shop_sync_escrow_records`;
+CREATE TABLE `shop_sync_escrow_records` (
+  `id` bigint unsigned NOT NULL COMMENT '主键ID(Redis分布式ID)',
+  `shop_id` bigint unsigned NOT NULL COMMENT 'Shopee店铺ID',
+  `last_sync_time` bigint NOT NULL DEFAULT 0 COMMENT '上次同步时间戳',
+  `last_sync_at` datetime DEFAULT NULL COMMENT '上次同步时间',
+  `total_synced_count` bigint NOT NULL DEFAULT 0 COMMENT '累计同步数量',
+  `last_sync_count` int NOT NULL DEFAULT 0 COMMENT '上次同步数量',
+  `last_error` varchar(500) NOT NULL DEFAULT '' COMMENT '上次错误信息',
+  `consecutive_fail_count` int NOT NULL DEFAULT 0 COMMENT '连续失败次数',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 0=禁用 1=启用 2=暂停',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_shop_id` (`shop_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='店铺结算明细同步记录表';
 
 -- ----------------------------
 -- 6. 利润分成配置表
@@ -1225,6 +1258,29 @@ DROP PROCEDURE IF EXISTS alter_order_items_add_columns;
 */
 
 -- ============================================================================
+-- 增量迁移：shop_sync_records 拆分为 3 张独立表
+-- 仅在已有库升级时执行（新建库无需执行）
+-- ============================================================================
+/*
+-- 1. 创建新表（若 balance.sql 主建表已执行则跳过）
+-- 2. 迁移数据
+INSERT INTO shop_sync_finance_income_records (id, shop_id, last_sync_time, last_transaction_id, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at)
+SELECT id, shop_id, last_sync_time, last_transaction_id, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at
+FROM shop_sync_records WHERE sync_type = 'finance_income';
+
+INSERT INTO shop_sync_order_records (id, shop_id, last_sync_time, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at)
+SELECT id, shop_id, last_sync_time, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at
+FROM shop_sync_records WHERE sync_type = 'order';
+
+INSERT INTO shop_sync_escrow_records (id, shop_id, last_sync_time, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at)
+SELECT id, shop_id, last_sync_time, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at
+FROM shop_sync_records WHERE sync_type = 'escrow';
+
+-- 3. 删除旧表
+DROP TABLE IF EXISTS shop_sync_records;
+*/
+
+-- ============================================================================
 -- 附录：表清单与分表规则说明
 -- ============================================================================
 --
@@ -1234,7 +1290,9 @@ DROP PROCEDURE IF EXISTS alter_order_items_add_columns;
 --   2     shops                            店铺表
 --   3     shop_authorizations              店铺授权表
 --   4     shop_operator_relations          店铺-运营分配关系表
---   5     shop_sync_records                店铺同步记录表
+--   5a    shop_sync_finance_income_records 店铺财务收入同步记录表
+--   5b    shop_sync_order_records          店铺订单同步记录表
+--   5c    shop_sync_escrow_records         店铺结算明细同步记录表
 --   6     profit_share_configs             利润分成配置表
 --   7     logistics_channels               物流渠道表
 --   8     prepayment_accounts              预付款账户表

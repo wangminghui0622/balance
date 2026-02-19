@@ -91,12 +91,11 @@ func (h *WebhookHandler) processWebhook(req WebhookRequest) {
 		// 物流追踪更新
 		h.webhookService.HandleTrackingUpdate(ctx, req.ShopID, req.Data, req.Timestamp)
 
-	case consts.WebhookBuyerCancelOrder:
-		// 买家/卖家取消订单
+	case consts.WebhookBuyerCancelOrder: //区分发货前/发货后取消（CANCELLED_BEFORE_SHIP / CANCELLED）
 		h.webhookService.HandleOrderCancel(ctx, req.ShopID, req.Data, req.Timestamp)
 
-	case consts.WebhookReturnCreated, consts.WebhookReturnStatusChange:
-		// 退货退款创建 / 退货退款状态变更
+	case consts.WebhookReturnCreated, //WebhookReturnCreated 退货退款创建（买家发起退货/退款）
+		consts.WebhookReturnStatusChange: //WebhookReturnStatusChange 退货退款状态变更（如：卖家同意、买家寄回、退款完成等）
 		h.webhookService.HandleReturn(ctx, req.ShopID, req.Data, req.Timestamp, req.Code)
 
 	case consts.WebhookBannedItem:

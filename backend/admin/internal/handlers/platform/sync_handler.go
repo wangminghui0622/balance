@@ -26,14 +26,14 @@ func (h *SyncHandler) GetSyncStats(c *gin.Context) {
 	var pausedShops int64
 	var totalSynced int64
 
-	db.Model(&models.ShopSyncRecord{}).Where("sync_type = ?", models.SyncTypeFinanceIncome).Count(&totalShops)
-	db.Model(&models.ShopSyncRecord{}).Where("sync_type = ? AND status = ?", models.SyncTypeFinanceIncome, models.SyncStatusEnabled).Count(&enabledShops)
-	db.Model(&models.ShopSyncRecord{}).Where("sync_type = ? AND status = ?", models.SyncTypeFinanceIncome, models.SyncStatusPaused).Count(&pausedShops)
-	db.Model(&models.ShopSyncRecord{}).Where("sync_type = ?", models.SyncTypeFinanceIncome).Select("COALESCE(SUM(total_synced_count), 0)").Scan(&totalSynced)
+	db.Model(&models.ShopSyncFinanceIncomeRecord{}).Count(&totalShops)
+	db.Model(&models.ShopSyncFinanceIncomeRecord{}).Where("status = ?", models.SyncStatusEnabled).Count(&enabledShops)
+	db.Model(&models.ShopSyncFinanceIncomeRecord{}).Where("status = ?", models.SyncStatusPaused).Count(&pausedShops)
+	db.Model(&models.ShopSyncFinanceIncomeRecord{}).Select("COALESCE(SUM(total_synced_count), 0)").Scan(&totalSynced)
 
 	// 获取最近失败的店铺
-	var failedRecords []models.ShopSyncRecord
-	db.Where("sync_type = ? AND consecutive_fail_count > 0", models.SyncTypeFinanceIncome).
+	var failedRecords []models.ShopSyncFinanceIncomeRecord
+	db.Where("consecutive_fail_count > 0").
 		Order("consecutive_fail_count DESC").
 		Limit(10).
 		Find(&failedRecords)
@@ -52,7 +52,6 @@ func (h *SyncHandler) GetSyncStats(c *gin.Context) {
 func (h *SyncHandler) ListSyncRecords(c *gin.Context) {
 	db := database.GetDB()
 
-	syncType := c.DefaultQuery("sync_type", models.SyncTypeFinanceIncome)
 	status := c.Query("status")
 	page := 1
 	pageSize := 20
@@ -68,7 +67,7 @@ func (h *SyncHandler) ListSyncRecords(c *gin.Context) {
 		}
 	}
 
-	query := db.Model(&models.ShopSyncRecord{}).Where("sync_type = ?", syncType)
+	query := db.Model(&models.ShopSyncFinanceIncomeRecord{})
 	if status != "" {
 		if s, err := parseInt(status); err == nil {
 			query = query.Where("status = ?", s)
@@ -78,7 +77,7 @@ func (h *SyncHandler) ListSyncRecords(c *gin.Context) {
 	var total int64
 	query.Count(&total)
 
-	var records []models.ShopSyncRecord
+	var records []models.ShopSyncFinanceIncomeRecord
 	offset := (page - 1) * pageSize
 	query.Order("updated_at DESC").Offset(offset).Limit(pageSize).Find(&records)
 
@@ -91,10 +90,9 @@ func (h *SyncHandler) ResetSyncRecord(c *gin.Context) {
 	db := database.GetDB()
 
 	shopID := c.Param("shop_id")
-	syncType := c.DefaultQuery("sync_type", models.SyncTypeFinanceIncome)
 
-	result := db.Model(&models.ShopSyncRecord{}).
-		Where("shop_id = ? AND sync_type = ?", shopID, syncType).
+	result := db.Model(&models.ShopSyncFinanceIncomeRecord{}).
+		Where("shop_id = ?", shopID).
 		Updates(map[string]interface{}{
 			"status":                 models.SyncStatusEnabled,
 			"consecutive_fail_count": 0,

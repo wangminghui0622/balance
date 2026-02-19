@@ -80,17 +80,16 @@ func (s *FinanceSyncService) ScheduleAllShops() {
 	log.Printf("开始调度 %d 个店铺的财务同步任务", len(shops))
 	for _, shop := range shops {
 		// 检查同步记录状态
-		var record models.ShopSyncRecord
-		err := s.db.Where("shop_id = ? AND sync_type = ?", shop.ShopID, models.SyncTypeFinanceIncome).First(&record).Error
+		var record models.ShopSyncFinanceIncomeRecord
+		err := s.db.Where("shop_id = ?", shop.ShopID).First(&record).Error
 
 		if err == gorm.ErrRecordNotFound {
 			// 创建同步记录
-			ShopSyncRecordid, _ := s.idGenerator.GenerateShopSyncRecordID(s.ctx)
-			record = models.ShopSyncRecord{
-				ID:       uint64(ShopSyncRecordid),
-				ShopID:   shop.ShopID,
-				SyncType: models.SyncTypeFinanceIncome,
-				Status:   models.SyncStatusEnabled,
+			recordID, _ := s.idGenerator.GenerateShopSyncRecordID(s.ctx)
+			record = models.ShopSyncFinanceIncomeRecord{
+				ID:     uint64(recordID),
+				ShopID: shop.ShopID,
+				Status: models.SyncStatusEnabled,
 			}
 			s.db.Create(&record)
 		} else if record.Status != models.SyncStatusEnabled {
@@ -163,8 +162,8 @@ func (s *FinanceSyncService) processTask(task models.SyncTask) {
 		}
 	}
 
-	s.db.Model(&models.ShopSyncRecord{}).
-		Where("shop_id = ? AND sync_type = ?", task.ShopID, models.SyncTypeFinanceIncome).
+	s.db.Model(&models.ShopSyncFinanceIncomeRecord{}).
+		Where("shop_id = ?", task.ShopID).
 		Updates(updates)
 }
 
@@ -191,8 +190,8 @@ func (s *FinanceSyncService) syncShopFinance(ctx context.Context, shopID uint64)
 	}
 
 	// 获取同步记录
-	var record models.ShopSyncRecord
-	s.db.Where("shop_id = ? AND sync_type = ?", shopID, models.SyncTypeFinanceIncome).First(&record)
+	var record models.ShopSyncFinanceIncomeRecord
+	s.db.Where("shop_id = ?", shopID).First(&record)
 
 	// 拉取交易记录
 	client := shopee.NewClient(shop.Region)
@@ -337,10 +336,10 @@ func (s *FinanceSyncService) GetSyncStats() map[string]interface{} {
 	var pausedShops int64
 	var totalSynced int64
 
-	s.db.Model(&models.ShopSyncRecord{}).Where("sync_type = ?", models.SyncTypeFinanceIncome).Count(&totalShops)
-	s.db.Model(&models.ShopSyncRecord{}).Where("sync_type = ? AND status = ?", models.SyncTypeFinanceIncome, models.SyncStatusEnabled).Count(&enabledShops)
-	s.db.Model(&models.ShopSyncRecord{}).Where("sync_type = ? AND status = ?", models.SyncTypeFinanceIncome, models.SyncStatusPaused).Count(&pausedShops)
-	s.db.Model(&models.ShopSyncRecord{}).Where("sync_type = ?", models.SyncTypeFinanceIncome).Select("COALESCE(SUM(total_synced_count), 0)").Scan(&totalSynced)
+	s.db.Model(&models.ShopSyncFinanceIncomeRecord{}).Count(&totalShops)
+	s.db.Model(&models.ShopSyncFinanceIncomeRecord{}).Where("status = ?", models.SyncStatusEnabled).Count(&enabledShops)
+	s.db.Model(&models.ShopSyncFinanceIncomeRecord{}).Where("status = ?", models.SyncStatusPaused).Count(&pausedShops)
+	s.db.Model(&models.ShopSyncFinanceIncomeRecord{}).Select("COALESCE(SUM(total_synced_count), 0)").Scan(&totalSynced)
 
 	return map[string]interface{}{
 		"total_shops":   totalShops,

@@ -5,25 +5,31 @@ import (
 	"sync"
 	"time"
 
+	"balance/backend/internal/database"
 	"balance/backend/internal/utils"
 
+	"github.com/go-redsync/redsync/v4"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 )
 
-// MaintenanceScheduler 维护任务调度器
+const (
+	maintenanceLockTTL = 5 * time.Minute
+)
+
+// MaintenanceScheduler 维护任务调度器（多机部署时通过分布式锁保证单机执行）
 type MaintenanceScheduler struct {
 	cron              *cron.Cron
 	archiveService    *ArchiveService
 	statsService      *StatsService
 	settlementService *SettlementService
-	wg                sync.WaitGroup // 用于等待后台任务结束
-	stopChan          chan struct{}   // 用于通知后台任务停止
-	logger            *zap.SugaredLogger // 文件日志
+	rs                *redsync.Redsync
+	wg                sync.WaitGroup
+	stopChan          chan struct{}
+	logger            *zap.SugaredLogger
 }
 
 // NewMaintenanceScheduler 创建维护任务调度器
-// logger: 可选的 zap SugaredLogger，传nil则使用默认标准输出
 func NewMaintenanceScheduler(logger ...*zap.SugaredLogger) *MaintenanceScheduler {
 	var l *zap.SugaredLogger
 	if len(logger) > 0 && logger[0] != nil {
@@ -36,82 +42,104 @@ func NewMaintenanceScheduler(logger ...*zap.SugaredLogger) *MaintenanceScheduler
 		archiveService:    NewArchiveService(),
 		statsService:      NewStatsService(),
 		settlementService: NewSettlementService(),
+		rs:                database.GetRedsync(),
 		stopChan:          make(chan struct{}),
 		logger:            l,
 	}
+}
+
+// tryRunWithLock 尝试获取分布式锁后执行，获取失败则跳过（其他节点正在执行）
+func (s *MaintenanceScheduler) tryRunWithLock(lockKey string, fn func()) {
+	mutex := s.rs.NewMutex(lockKey, redsync.WithExpiry(maintenanceLockTTL), redsync.WithTries(1))
+	if err := mutex.LockContext(context.Background()); err != nil {
+		s.logger.Infof("[Maintenance] %s: 其他节点正在执行，跳过", lockKey)
+		return
+	}
+	defer mutex.Unlock()
+	fn()
 }
 
 // Start 启动维护任务调度器
 func (s *MaintenanceScheduler) Start() {
 	s.logger.Info("[Maintenance] 启动维护任务调度器...")
 
-	// 每天凌晨2点执行日志归档
+	// 每天凌晨2点执行日志归档（分布式锁）
 	_, err := s.cron.AddFunc("0 0 2 * * *", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		count, err := s.archiveService.ArchiveOperationLogs(ctx)
-		if err != nil {
-			s.logger.Infof("[Maintenance] 日志归档失败: %v", err)
-		} else {
-			s.logger.Infof("[Maintenance] 日志归档完成，归档 %d 条记录", count)
-		}
+		s.tryRunWithLock("maintenance:archive", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer cancel()
+			count, err := s.archiveService.ArchiveOperationLogs(ctx)
+			if err != nil {
+				s.logger.Infof("[Maintenance] 日志归档失败: %v", err)
+			} else {
+				s.logger.Infof("[Maintenance] 日志归档完成，归档 %d 条记录", count)
+			}
+		})
 	})
 	if err != nil {
 		s.logger.Infof("[Maintenance] 添加日志归档任务失败: %v", err)
 	}
 
-	// 每天凌晨3点生成每日统计
+	// 每天凌晨3点生成每日统计（分布式锁）
 	_, err = s.cron.AddFunc("0 0 3 * * *", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		if err := s.statsService.GenerateDailyStats(ctx); err != nil {
-			s.logger.Infof("[Maintenance] 生成每日统计失败: %v", err)
-		}
+		s.tryRunWithLock("maintenance:stats", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer cancel()
+			if err := s.statsService.GenerateDailyStats(ctx); err != nil {
+				s.logger.Infof("[Maintenance] 生成每日统计失败: %v", err)
+			}
+		})
 	})
 	if err != nil {
 		s.logger.Infof("[Maintenance] 添加每日统计任务失败: %v", err)
 	}
 
-	// 每月1号凌晨4点清理过期归档（保留365天）
+	// 每月1号凌晨4点清理过期归档（分布式锁）
 	_, err = s.cron.AddFunc("0 0 4 1 * *", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		count, err := s.archiveService.CleanupOldArchives(ctx, 365)
-		if err != nil {
-			s.logger.Infof("[Maintenance] 清理过期归档失败: %v", err)
-		} else {
-			s.logger.Infof("[Maintenance] 清理过期归档完成，删除 %d 条记录", count)
-		}
+		s.tryRunWithLock("maintenance:cleanup", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer cancel()
+			count, err := s.archiveService.CleanupOldArchives(ctx, 365)
+			if err != nil {
+				s.logger.Infof("[Maintenance] 清理过期归档失败: %v", err)
+			} else {
+				s.logger.Infof("[Maintenance] 清理过期归档完成，删除 %d 条记录", count)
+			}
+		})
 	})
 	if err != nil {
 		s.logger.Infof("[Maintenance] 添加清理归档任务失败: %v", err)
 	}
 
-	// 每10分钟处理一次虾皮结算（打款）
+	// 每10分钟处理一次虾皮结算（分布式锁）
 	_, err = s.cron.AddFunc("0 */10 * * * *", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-		count, err := s.settlementService.ProcessShopeeSettlement(ctx)
-		if err != nil {
-			s.logger.Infof("[Maintenance] 处理虾皮结算失败: %v", err)
-		} else if count > 0 {
-			s.logger.Infof("[Maintenance] 处理虾皮结算完成，结算 %d 笔订单", count)
-		}
+		s.tryRunWithLock("maintenance:settlement", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			count, err := s.settlementService.ProcessShopeeSettlement(ctx)
+			if err != nil {
+				s.logger.Infof("[Maintenance] 处理虾皮结算失败: %v", err)
+			} else if count > 0 {
+				s.logger.Infof("[Maintenance] 处理虾皮结算完成，结算 %d 笔订单", count)
+			}
+		})
 	})
 	if err != nil {
 		s.logger.Infof("[Maintenance] 添加虾皮结算任务失败: %v", err)
 	}
 
-	// 每10分钟处理一次虾皮调账（退款、扣款等）
+	// 每10分钟处理一次虾皮调账（分布式锁）
 	_, err = s.cron.AddFunc("0 */10 * * * *", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-		count, err := s.settlementService.ProcessShopeeAdjustments(ctx)
-		if err != nil {
-			s.logger.Infof("[Maintenance] 处理虾皮调账失败: %v", err)
-		} else if count > 0 {
-			s.logger.Infof("[Maintenance] 处理虾皮调账完成，处理 %d 笔调账", count)
-		}
+		s.tryRunWithLock("maintenance:adjustment", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			count, err := s.settlementService.ProcessShopeeAdjustments(ctx)
+			if err != nil {
+				s.logger.Infof("[Maintenance] 处理虾皮调账失败: %v", err)
+			} else if count > 0 {
+				s.logger.Infof("[Maintenance] 处理虾皮调账完成，处理 %d 笔调账", count)
+			}
+		})
 	})
 	if err != nil {
 		s.logger.Infof("[Maintenance] 添加虾皮调账任务失败: %v", err)
@@ -134,20 +162,26 @@ func (s *MaintenanceScheduler) Stop() {
 	s.logger.Info("[Maintenance] 维护任务调度器已停止")
 }
 
-// backfillStats 补充历史统计数据（首次启动时执行）
+// backfillStats 补充历史统计数据（首次启动时执行，带分布式锁）
 func (s *MaintenanceScheduler) backfillStats() {
 	defer s.wg.Done()
-	
-	// 等待系统启动完成，但可被停止信号中断
+
 	select {
 	case <-time.After(10 * time.Second):
 	case <-s.stopChan:
 		return
 	}
 
+	mutex := s.rs.NewMutex("maintenance:backfill_stats", redsync.WithExpiry(maintenanceLockTTL), redsync.WithTries(1))
+	if err := mutex.LockContext(context.Background()); err != nil {
+		s.logger.Info("[Maintenance] 其他节点正在补充统计，跳过")
+		return
+	}
+	defer mutex.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	
+
 	// 检查是否有统计数据
 	var count int64
 	if err := s.statsService.db.Model(&struct{}{}).Table("platform_daily_stats").Count(&count).Error; err != nil {
