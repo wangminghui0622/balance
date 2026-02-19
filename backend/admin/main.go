@@ -14,6 +14,7 @@ import (
 	"balance/backend/admin/internal/router"
 	"balance/backend/internal/config"
 	"balance/backend/internal/database"
+	"balance/backend/internal/models"
 	"balance/backend/internal/ratelimit"
 	"balance/backend/internal/services"
 	"balance/backend/internal/services/sync"
@@ -85,6 +86,9 @@ func main() {
 	metricsCollector := services.NewMetricsCollector(metricsLogger)
 	metricsCollector.Start()
 
+	// 店主订单统计缓存：每 1 小时刷新一次（全部/未结算/已结算/账款调整）
+	go runShopowerOrderStatsRefresh()
+
 	// 设置路由
 	r := router.SetupRouter(cfg.App.Mode, cfg)
 
@@ -155,4 +159,34 @@ func main() {
 		closeMetricsLog()
 	}
 	log.Println("服务器已退出")
+}
+
+// runShopowerOrderStatsRefresh 每 1 小时刷新所有店主的订单统计缓存；启动后 30 秒先跑一次预热
+func runShopowerOrderStatsRefresh() {
+	orderService := services.NewOrderServiceWithPrepaymentCheck()
+	doRefresh := func() {
+		ctx := context.Background()
+		var adminIDs []int64
+		if err := database.GetDB().Model(&models.Shop{}).Distinct("admin_id").Pluck("admin_id", &adminIDs).Error; err != nil {
+			log.Printf("刷新店主订单统计: 获取 admin_id 失败: %v", err)
+			return
+		}
+		for _, adminID := range adminIDs {
+			stats, err := orderService.ComputeOrderStats(ctx, adminID)
+			if err != nil {
+				log.Printf("刷新店主订单统计 admin_id=%d: %v", adminID, err)
+				continue
+			}
+			if err := orderService.SetOrderStatsCache(ctx, adminID, stats); err != nil {
+				log.Printf("刷新店主订单统计 admin_id=%d 写缓存失败: %v", adminID, err)
+			}
+		}
+	}
+	time.Sleep(30 * time.Second)
+	doRefresh()
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		doRefresh()
+	}
 }

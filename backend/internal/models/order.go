@@ -87,6 +87,8 @@ type OrderItem struct {
 	ModelSKU  string          `gorm:"size:100;not null;default:'';comment:规格SKU" json:"model_sku"`
 	Quantity  int             `gorm:"not null;default:0;comment:数量" json:"quantity"`
 	ItemPrice decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:单价" json:"item_price"`
+	OrderStatus     string          `gorm:"size:50;not null;default:'';comment:子单状态: 空=正常 CANCELLED_BEFORE_SHIP=发货前取消" json:"order_status"`
+	PrepaymentAmount decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:该子单预付款金额。扣款时全为0；部分退款时在回调/拉取中填充" json:"prepayment_amount"`
 	CreatedAt time.Time       `gorm:"autoCreateTime;comment:创建时间" json:"created_at"`
 	UpdatedAt time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }

@@ -2,6 +2,7 @@ package shopower
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -225,6 +226,7 @@ func (s *OrderService) getAccessToken(ctx context.Context, shopID uint64) (strin
 
 
 // ListOrders 获取订单列表 - 使用分表
+// 语义：「全部订单」= 不传 shop_id、不传 status 时，返回 orders_x 下该 admin 绑定的所有 shop 的所有状态订单（可带 start_time/end_time 筛选）
 func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int64, status, startTime, endTime string, page, pageSize int) ([]models.Order, int64, error) {
 	var shopIDs []uint64
 	s.db.Model(&models.Shop{}).Where("admin_id = ?", adminID).Pluck("shop_id", &shopIDs)
@@ -232,7 +234,7 @@ func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int
 		return []models.Order{}, 0, nil
 	}
 
-	// 如果指定了shopID，只查询对应分表
+	// 指定了 shop_id 时，只查该店铺对应分表
 	if shopID > 0 {
 		orderTable := database.GetOrderTableName(uint64(shopID))
 		query := s.db.Table(orderTable).Where("shop_id = ?", shopID)
@@ -258,10 +260,11 @@ func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int
 		}
 
 		s.batchFillOrderLabels(orders)
+		s.batchFillOrderItems(orders)
 		return orders, total, nil
 	}
 
-	// 未指定shopID，需要查询多个分表（按店铺分组查询）
+	// 未指定 shop_id：查该 admin 下所有绑定店铺的订单（orders_x 多表），status 为空表示所有状态
 	var allOrders []models.Order
 	var total int64
 
@@ -312,8 +315,120 @@ func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int
 	result := allOrders[offset:end]
 
 	s.batchFillOrderLabels(result)
+	s.batchFillOrderItems(result)
 
 	return result, total, nil
+}
+
+// OrderStats 店主订单统计（全部/未结算/已结算/账款调整，不限制时间）
+type OrderStats struct {
+	AllOrdersCount    int64   `json:"all_orders_count"`
+	AllOrdersAmount   float64 `json:"all_orders_amount"`
+	UnsettledCount    int64   `json:"unsettled_count"`
+	UnsettledAmount   float64 `json:"unsettled_amount"`
+	SettledCount      int64   `json:"settled_count"`
+	SettledAmount     float64 `json:"settled_amount"`
+	AdjustmentCount   int64   `json:"adjustment_count"`
+	AdjustmentAmount  float64 `json:"adjustment_amount"`
+}
+
+// ComputeOrderStats 计算该 admin 绑定所有店铺的订单统计（不限制时间，金额为 total_amount 之和）
+func (s *OrderService) ComputeOrderStats(ctx context.Context, adminID int64) (*OrderStats, error) {
+	var shopIDs []uint64
+	if err := s.db.Model(&models.Shop{}).Where("admin_id = ?", adminID).Pluck("shop_id", &shopIDs).Error; err != nil {
+		return nil, err
+	}
+	if len(shopIDs) == 0 {
+		return &OrderStats{}, nil
+	}
+
+	shardShops := make(map[int][]uint64)
+	for _, sid := range shopIDs {
+		idx := database.GetShardIndex(sid)
+		shardShops[idx] = append(shardShops[idx], sid)
+	}
+
+	stats := &OrderStats{}
+	for idx, sids := range shardShops {
+		orderTable := fmt.Sprintf("orders_%d", idx)
+		escrowTable := fmt.Sprintf("order_escrows_%d", idx)
+
+		// 全部：COUNT(*), SUM(total_amount)
+		var allCount int64
+		var allSum float64
+		s.db.Table(orderTable).Where("shop_id IN ?", sids).Count(&allCount)
+		s.db.Table(orderTable).Where("shop_id IN ?", sids).Select("COALESCE(SUM(total_amount),0)").Scan(&allSum)
+		stats.AllOrdersCount += allCount
+		stats.AllOrdersAmount += allSum
+
+		// 未结算：READY_TO_SHIP, PROCESSED, SHIPPED
+		var unsettledCount int64
+		var unsettledSum float64
+		s.db.Table(orderTable).Where("shop_id IN ? AND order_status IN ?", sids, []string{"READY_TO_SHIP", "PROCESSED", "SHIPPED"}).Count(&unsettledCount)
+		s.db.Table(orderTable).Where("shop_id IN ? AND order_status IN ?", sids, []string{"READY_TO_SHIP", "PROCESSED", "SHIPPED"}).Select("COALESCE(SUM(total_amount),0)").Scan(&unsettledSum)
+		stats.UnsettledCount += unsettledCount
+		stats.UnsettledAmount += unsettledSum
+
+		// 已结算：COMPLETED
+		var settledCount int64
+		var settledSum float64
+		s.db.Table(orderTable).Where("shop_id IN ? AND order_status = ?", sids, "COMPLETED").Count(&settledCount)
+		s.db.Table(orderTable).Where("shop_id IN ? AND order_status = ?", sids, "COMPLETED").Select("COALESCE(SUM(total_amount),0)").Scan(&settledSum)
+		stats.SettledCount += settledCount
+		stats.SettledAmount += settledSum
+
+		// 账款调整：有 order_escrow 且 drc_adjustable_refund / seller_return_refund / reverse_shipping_fee 任一非 0
+		var adjCount int64
+		var adjSum float64
+		s.db.Table(orderTable+" AS o").
+			Joins("INNER JOIN "+escrowTable+" e ON o.shop_id = e.shop_id AND o.order_sn = e.order_sn").
+			Where("o.shop_id IN ? AND (e.drc_adjustable_refund != 0 OR e.seller_return_refund != 0 OR e.reverse_shipping_fee != 0)", sids).
+			Count(&adjCount)
+		s.db.Table(orderTable+" AS o").
+			Select("COALESCE(SUM(o.total_amount),0)").
+			Joins("INNER JOIN "+escrowTable+" e ON o.shop_id = e.shop_id AND o.order_sn = e.order_sn").
+			Where("o.shop_id IN ? AND (e.drc_adjustable_refund != 0 OR e.seller_return_refund != 0 OR e.reverse_shipping_fee != 0)", sids).
+			Scan(&adjSum)
+		stats.AdjustmentCount += adjCount
+		stats.AdjustmentAmount += adjSum
+	}
+
+	return stats, nil
+}
+
+// GetOrderStatsCached 从缓存读取订单统计；miss 时计算并写入缓存后返回
+func (s *OrderService) GetOrderStatsCached(ctx context.Context, adminID int64) (*OrderStats, error) {
+	rdb := database.GetRedis()
+	key := fmt.Sprintf(consts.KeyShopowerOrderStats, adminID)
+	data, err := rdb.Get(ctx, key).Bytes()
+	if err == nil {
+		var stats OrderStats
+		if err := json.Unmarshal(data, &stats); err != nil {
+			return nil, err
+		}
+		return &stats, nil
+	}
+	if err != redis.Nil {
+		return nil, err
+	}
+	stats, err := s.ComputeOrderStats(ctx, adminID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.SetOrderStatsCache(ctx, adminID, stats); err != nil {
+		// 写缓存失败不影响返回
+	}
+	return stats, nil
+}
+
+// SetOrderStatsCache 将订单统计写入 Redis 缓存（供定时器使用）
+func (s *OrderService) SetOrderStatsCache(ctx context.Context, adminID int64, stats *OrderStats) error {
+	data, err := json.Marshal(stats)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf(consts.KeyShopowerOrderStats, adminID)
+	return database.GetRedis().Set(ctx, key, data, consts.ShopowerOrderStatsExpire).Err()
 }
 
 // batchFillOrderLabels 批量填充订单显示标签（解决 N+1 查询问题）
@@ -351,6 +466,45 @@ func (s *OrderService) batchFillOrderLabels(orders []models.Order) {
 			s.fillOrderLabelsWithEscrow(&orders[i], &escrow)
 		} else {
 			s.fillOrderLabelsWithEscrow(&orders[i], nil)
+		}
+	}
+}
+
+// batchFillOrderItems 批量填充订单商品明细（从 order_items_x 按 order_sn 关联）
+func (s *OrderService) batchFillOrderItems(orders []models.Order) {
+	if len(orders) == 0 {
+		return
+	}
+
+	// 按分表分组：(shardIdx -> []orderSN)
+	shardOrderSNs := make(map[int][]string)
+	shardShopID := make(map[int]uint64)
+	for _, o := range orders {
+		idx := database.GetShardIndex(o.ShopID)
+		shardOrderSNs[idx] = append(shardOrderSNs[idx], o.OrderSN)
+		shardShopID[idx] = o.ShopID
+	}
+
+	// 批量查询 order_items：order_sn 在 Shopee 中全局唯一，按 order_sn 关联即可
+	// key = order_sn -> []OrderItem
+	itemsMap := make(map[string][]models.OrderItem)
+	for idx, orderSNs := range shardOrderSNs {
+		if len(orderSNs) == 0 {
+			continue
+		}
+		itemTable := database.GetOrderItemTableName(shardShopID[idx])
+		var items []models.OrderItem
+		s.db.Table(itemTable).Where("order_sn IN ?", orderSNs).Order("id ASC").Find(&items)
+		for _, it := range items {
+			itemsMap[it.OrderSN] = append(itemsMap[it.OrderSN], it)
+		}
+	}
+
+	// 填充每个订单的 Items
+	for i := range orders {
+		orders[i].Items = itemsMap[orders[i].OrderSN]
+		if orders[i].Items == nil {
+			orders[i].Items = []models.OrderItem{}
 		}
 	}
 }
@@ -396,7 +550,7 @@ func (s *OrderService) fillOrderLabelsWithEscrow(order *models.Order, escrow *mo
 			order.AdjustmentLabel3 = fmt.Sprintf("虾皮订单金额：%s%s", currency, amount)
 		}
 
-	case consts.OrderStatusCancelled, consts.OrderStatusInCancel:
+	case consts.OrderStatusCancelled, consts.OrderStatusCancelledBeforeShip, consts.OrderStatusInCancel:
 		if hasEscrow {
 			adjustTotal := escrow.SellerReturnRefund.Add(escrow.DrcAdjustableRefund).Add(escrow.ReverseShippingFee)
 			commission := escrow.CommissionFee.Add(escrow.ServiceFee).Abs()

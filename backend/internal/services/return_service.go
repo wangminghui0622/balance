@@ -178,29 +178,33 @@ func (s *ReturnService) UpsertReturn(ctx context.Context, shopID uint64, detail 
 
 	// 在事务外处理退款（refund_status 已是 PROCESSING，其他协程不会重复处理）
 	if needProcessRefund {
-		s.processRefund(ctx, shopID, resp.ReturnSN, resp.OrderSN, refundAmount)
+		s.processRefund(ctx, shopID, detail)
 	}
 
 	return nil
 }
 
-// processRefund 处理退货退款 — 解冻预付款
+// processRefund 处理退货退款 — 返还预付款
 //
 // 前置条件：refund_status 已在 UpsertReturn 事务内被设为 PROCESSING（防止并发重入）
 //
 // 逻辑：
-//  1. 查找关联订单的预付款状态：只有 prepayment_status=1（已冻结）才需要解冻
-//  2. 部分退款：解冻 refund_amount；全部退款：解冻 total_amount
-//  3. 解冻预付款 + 托管退回 + 更新订单 + 标记退货记录 全部在同一事务中完成
-//  4. 失败时将 refund_status 标记为 FAILED（避免无限重试）
-func (s *ReturnService) processRefund(ctx context.Context, shopID uint64, returnSN, orderSN string, refundAmount decimal.Decimal) {
+//  - 发货前全额退款：主单+子单 CANCELLED_BEFORE_SHIP，返还主单 prepayment_amount
+//  - 发货前部分退款：退款子单 CANCELLED_BEFORE_SHIP，从回调/拉取数据填充子单 prepayment_amount，返还其和
+//  - 已发货：按 refund_amount 比例返还
+func (s *ReturnService) processRefund(ctx context.Context, shopID uint64, detail *shopee.ReturnDetailResponse) {
+	resp := &detail.Response
+	returnSN, orderSN := resp.ReturnSN, resp.OrderSN
+	refundAmount := decimal.NewFromFloat(resp.RefundAmount)
+
 	returnTable := database.GetReturnTableName(shopID)
 	orderTable := database.GetOrderTableName(shopID)
+	orderItemTable := database.GetOrderItemTableName(shopID)
+	shipmentRecordTable := database.GetOrderShipmentRecordTableName(shopID)
 
-	// 查找关联订单
 	var order models.Order
 	if err := s.db.Table(orderTable).
-		Select("id", "shop_id", "order_sn", "total_amount", "prepayment_status").
+		Select("id", "shop_id", "order_sn", "total_amount", "prepayment_amount", "prepayment_status").
 		Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
 		First(&order).Error; err != nil {
 		fmt.Printf("[ReturnService] 店铺=%d 退货=%s 关联订单=%s 未找到: %v\n", shopID, returnSN, orderSN, err)
@@ -208,15 +212,12 @@ func (s *ReturnService) processRefund(ctx context.Context, shopID uint64, return
 		return
 	}
 
-	// 只有预付款已冻结（prepayment_status=1）的订单才需要解冻
 	if order.PrepaymentStatus != models.PrepaymentSufficient {
-		fmt.Printf("[ReturnService] 店铺=%d 退货=%s 订单=%s 预付款状态=%d 无需解冻\n",
-			shopID, returnSN, orderSN, order.PrepaymentStatus)
+		fmt.Printf("[ReturnService] 店铺=%d 退货=%s 订单=%s 预付款状态=%d 无需返还\n", shopID, returnSN, orderSN, order.PrepaymentStatus)
 		s.markRefundStatus(returnTable, shopID, returnSN, models.ReturnRefundSkipped)
 		return
 	}
 
-	// 查找店铺老板
 	var shop models.Shop
 	if err := s.db.Select("admin_id").Where("shop_id = ?", shopID).First(&shop).Error; err != nil || shop.AdminID == 0 {
 		fmt.Printf("[ReturnService] 店铺=%d 查找店主失败\n", shopID)
@@ -224,48 +225,55 @@ func (s *ReturnService) processRefund(ctx context.Context, shopID uint64, return
 		return
 	}
 
-	// 确定解冻金额：取退款金额和订单总额的较小值
-	unfreezeAmount := refundAmount
-	if unfreezeAmount.GreaterThan(order.TotalAmount) {
-		unfreezeAmount = order.TotalAmount
-	}
+	// 是否发货前（运营未发货）
+	var shipmentRecord models.OrderShipmentRecord
+	beforeShip := !(s.db.Table(shipmentRecordTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
+		First(&shipmentRecord).Error == nil && shipmentRecord.Status == models.ShipmentRecordStatusShipped)
 
-	// 在同一事务中完成：解冻预付款 + 托管退回 + 订单状态更新 + 退货标记
+	isFullRefund := refundAmount.GreaterThanOrEqual(order.TotalAmount)
+	var unfreezeAmount decimal.Decimal
+
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		// 解冻预付款（使用 InTx 版本，复用同一事务连接）
-		_, err := s.accountService.UnfreezePrepaymentInTx(tx, ctx, shop.AdminID, unfreezeAmount, orderSN,
-			fmt.Sprintf("退货退款解冻-退货单%s 订单%s", returnSN, orderSN))
-		if err != nil {
-			return fmt.Errorf("解冻预付款失败: %w", err)
-		}
-
-		// 从托管账户退回（尽力而为，失败不影响退款主流程）
-		_ = s.accountService.TransferFromEscrowInTx(tx, ctx, shop.AdminID, unfreezeAmount, orderSN,
-			fmt.Sprintf("退货退款退回-退货单%s", returnSN))
-
-		// 如果是全额退款，更新订单预付款状态为未检查
-		if refundAmount.GreaterThanOrEqual(order.TotalAmount) {
-			if err := tx.Table(orderTable).
-				Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
-				Updates(map[string]interface{}{
-					"prepayment_status": models.PrepaymentUnchecked,
-				}).Error; err != nil {
-				return fmt.Errorf("更新订单预付款状态失败: %w", err)
+		if beforeShip && isFullRefund {
+			unfreezeAmount = order.PrepaymentAmount
+			if !unfreezeAmount.IsPositive() {
+				unfreezeAmount = order.TotalAmount
+			}
+		} else if beforeShip && !isFullRefund {
+			unfreezeAmount = s.computePartialRefundPrepaymentInTx(tx, shopID, orderSN, order, detail)
+		} else {
+			unfreezeAmount = refundAmount
+			if unfreezeAmount.GreaterThan(order.TotalAmount) {
+				unfreezeAmount = order.TotalAmount
 			}
 		}
 
-		// 标记退货记录为已处理
-		now := time.Now()
-		if err := tx.Table(returnTable).
-			Where("shop_id = ? AND return_sn = ? AND refund_status = ?", shopID, returnSN, models.ReturnRefundProcessing).
-			Updates(map[string]interface{}{
-				"refund_status":       models.ReturnRefundProcessed,
-				"refund_processed_at": now,
-			}).Error; err != nil {
-			return fmt.Errorf("标记退货已处理失败: %w", err)
+		_, innerErr := s.accountService.UnfreezePrepaymentInTx(tx, ctx, shop.AdminID, unfreezeAmount, orderSN,
+			fmt.Sprintf("退货退款返还-退货单%s 订单%s", returnSN, orderSN))
+		if innerErr != nil {
+			return fmt.Errorf("返还预付款失败: %w", innerErr)
 		}
 
-		return nil
+		if beforeShip {
+			if isFullRefund {
+				tx.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
+					Updates(map[string]interface{}{"order_status": consts.OrderStatusCancelledBeforeShip, "prepayment_status": models.PrepaymentUnchecked})
+				tx.Table(orderItemTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
+					Update("order_status", consts.OrderStatusCancelledBeforeShip)
+			} else {
+				tx.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
+					Update("prepayment_status", models.PrepaymentUnchecked)
+				// 子单已在 computePartialRefundPrepayment 中更新
+			}
+		} else if isFullRefund {
+			tx.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
+				Update("prepayment_status", models.PrepaymentUnchecked)
+		}
+
+		now := time.Now()
+		return tx.Table(returnTable).
+			Where("shop_id = ? AND return_sn = ? AND refund_status = ?", shopID, returnSN, models.ReturnRefundProcessing).
+			Updates(map[string]interface{}{"refund_status": models.ReturnRefundProcessed, "refund_processed_at": now}).Error
 	})
 
 	if err != nil {
@@ -273,9 +281,61 @@ func (s *ReturnService) processRefund(ctx context.Context, shopID uint64, return
 		s.markRefundStatus(returnTable, shopID, returnSN, models.ReturnRefundFailed)
 		return
 	}
+	fmt.Printf("[ReturnService] 店铺=%d 退货=%s 订单=%s 退款返还成功 金额=%s\n", shopID, returnSN, orderSN, unfreezeAmount.StringFixed(2))
+}
 
-	fmt.Printf("[ReturnService] 店铺=%d 退货=%s 订单=%s 退款解冻成功 金额=%s\n",
-		shopID, returnSN, orderSN, unfreezeAmount.StringFixed(2))
+// computePartialRefundPrepaymentInTx 在事务内计算部分退款应返还的预付款，并更新退款子单的 order_status、prepayment_amount
+func (s *ReturnService) computePartialRefundPrepaymentInTx(tx *gorm.DB, shopID uint64, orderSN string, order models.Order, detail *shopee.ReturnDetailResponse) decimal.Decimal {
+	resp := &detail.Response
+	orderItemTable := database.GetOrderItemTableName(shopID)
+	var orderItems []models.OrderItem
+	if err := tx.Table(orderItemTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).Find(&orderItems).Error; err != nil {
+		return decimal.Zero
+	}
+
+	refundAmount := decimal.NewFromFloat(resp.RefundAmount)
+	orderPrepayment := order.PrepaymentAmount
+	if !orderPrepayment.IsPositive() {
+		orderPrepayment = order.TotalAmount
+	}
+
+	var totalUnfreeze decimal.Decimal
+	itemMap := make(map[string]int) // "itemID:modelID" -> index in resp.Item
+	for i, it := range resp.Item {
+		itemMap[fmt.Sprintf("%d:%d", it.ItemID, it.ModelID)] = i
+	}
+
+	for i := range orderItems {
+		oi := &orderItems[i]
+		key := fmt.Sprintf("%d:%d", oi.ItemID, oi.ModelID)
+		idx, ok := itemMap[key]
+		if !ok {
+			continue
+		}
+		ritem := resp.Item[idx]
+		var itemPrepayment decimal.Decimal
+		if ritem.EscrowAmount > 0 {
+			itemPrepayment = decimal.NewFromFloat(ritem.EscrowAmount)
+		} else {
+			// 兜底：按退款金额比例分配
+			itemRefund := decimal.NewFromFloat(float64(ritem.Amount) * ritem.ItemPrice)
+			if order.TotalAmount.IsPositive() {
+				itemPrepayment = orderPrepayment.Mul(itemRefund).Div(order.TotalAmount)
+			}
+		}
+		totalUnfreeze = totalUnfreeze.Add(itemPrepayment)
+		tx.Table(orderItemTable).Where("id = ?", oi.ID).Updates(map[string]interface{}{
+			"order_status":      consts.OrderStatusCancelledBeforeShip,
+			"prepayment_amount": itemPrepayment,
+		})
+	}
+
+	if totalUnfreeze.IsZero() && len(resp.Item) > 0 {
+		if order.TotalAmount.IsPositive() {
+			totalUnfreeze = orderPrepayment.Mul(refundAmount).Div(order.TotalAmount)
+		}
+	}
+	return totalUnfreeze
 }
 
 // markRefundStatus 更新退货记录的退款处理状态

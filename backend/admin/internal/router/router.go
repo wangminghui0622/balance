@@ -87,6 +87,7 @@ func SetupRouter(mode string, cfg *config.Config) *gin.Engine {
 				shopowerOrderHandler := shopower.NewOrderHandler()
 				shopowerAuth.POST(consts.RouteShopowerOrderSync, shopowerOrderHandler.SyncOrders)
 				shopowerAuth.GET(consts.RouteShopowerOrders, shopowerOrderHandler.ListOrders)
+				shopowerAuth.GET(consts.RouteShopowerOrderStats, shopowerOrderHandler.GetOrderStats)
 				shopowerAuth.GET(consts.RouteShopowerOrderReadyToShip, shopowerOrderHandler.GetReadyToShipOrders)
 				shopowerAuth.GET(consts.RouteShopowerOrderDetail, shopowerOrderHandler.GetOrder)
 				shopowerAuth.POST(consts.RouteShopowerOrderRefresh, shopowerOrderHandler.RefreshOrder)

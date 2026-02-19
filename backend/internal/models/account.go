@@ -132,23 +132,6 @@ func (PenaltyBonusAccount) TableName() string {
 	return "penalty_bonus_accounts"
 }
 
-// EscrowAccount 托管账户（临时托管店主预付款，待结算时分账）
-type EscrowAccount struct {
-	ID        uint64          `gorm:"primaryKey;autoIncrement;comment:主键ID" json:"id"`
-	AdminID   int64           `gorm:"not null;uniqueIndex;comment:用户ID(店主)" json:"admin_id"`
-	Balance   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:托管余额" json:"balance"`
-	TotalIn   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计转入" json:"total_in"`
-	TotalOut  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:累计转出" json:"total_out"`
-	Currency  string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
-	Status    int8            `gorm:"not null;default:1;comment:状态(1正常/2冻结)" json:"status"`
-	CreatedAt time.Time       `gorm:"autoCreateTime;comment:创建时间" json:"created_at"`
-	UpdatedAt time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
-}
-
-func (EscrowAccount) TableName() string {
-	return "escrow_accounts"
-}
-
 // WithdrawApplication 提现申请
 type WithdrawApplication struct {
 	ID                  uint64          `gorm:"primaryKey;comment:主键ID" json:"id"`

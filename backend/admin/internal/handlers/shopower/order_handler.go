@@ -77,6 +77,7 @@ func (h *OrderHandler) SyncOrders(c *gin.Context) {
 
 // ListOrders 获取订单列表
 // GET /api/v1/balance/admin/shopower/orders
+// 不传 shop_id、不传 status 时即「全部订单」：该 admin 绑定的所有 shop 在 orders_x 下的所有状态订单
 func (h *OrderHandler) ListOrders(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -115,6 +116,22 @@ func (h *OrderHandler) ListOrders(c *gin.Context) {
 		"page":  page,
 		"size":  pageSize,
 	})
+}
+
+// GetOrderStats 获取订单统计（四张卡片：全部/未结算/已结算/账款调整，从缓存读，1小时更新）
+// GET /api/v1/balance/admin/shopower/orders/stats
+func (h *OrderHandler) GetOrderStats(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		utils.Unauthorized(c, "未登录")
+		return
+	}
+	stats, err := h.orderService.GetOrderStatsCached(c.Request.Context(), userID.(int64))
+	if err != nil {
+		utils.InternalError(c, err.Error())
+		return
+	}
+	utils.Success(c, stats)
 }
 
 // GetReadyToShipOrders 获取待发货订单

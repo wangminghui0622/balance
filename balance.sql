@@ -321,23 +321,7 @@ CREATE TABLE `penalty_bonus_accounts` (
   UNIQUE KEY `uk_admin_id` (`admin_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='罚补账户表';
 
--- ----------------------------
--- 14. 托管账户表（临时托管店主预付款，待结算时分账）
--- ----------------------------
-DROP TABLE IF EXISTS `escrow_accounts`;
-CREATE TABLE `escrow_accounts` (
-  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID(自增)',
-  `admin_id` bigint NOT NULL COMMENT '用户ID(店主,关联admin表)',
-  `balance` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '托管余额',
-  `total_in` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计转入金额',
-  `total_out` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计转出金额',
-  `currency` varchar(10) NOT NULL DEFAULT 'TWD' COMMENT '货币代码',
-  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=冻结',
-  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_admin_id` (`admin_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='托管账户表';
+
 
 -- ----------------------------
 -- 15. 收款账户表（用户绑定的银行卡/电子钱包）
@@ -604,6 +588,8 @@ BEGIN
           `model_sku` varchar(100) NOT NULL DEFAULT '''' COMMENT ''规格SKU'',
           `quantity` int NOT NULL DEFAULT 0 COMMENT ''数量'',
           `item_price` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''单价'',
+          `order_status` varchar(50) NOT NULL DEFAULT '''' COMMENT ''子单状态: 空=正常 CANCELLED_BEFORE_SHIP=发货前取消'',
+          `prepayment_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''该子单预付款金额。扣款时全为0；部分退款时在回调/拉取中填充用于计算返还'',
           `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT ''创建时间'',
           `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT ''更新时间'',
           PRIMARY KEY (`id`),
@@ -1191,7 +1177,7 @@ BEGIN
           KEY `idx_order_sn` (`order_sn`),
           KEY `idx_status` (`status`),
           KEY `idx_refund_status` (`refund_status`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT=''退货退款表(分表', i, ')''');
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT=''退货退款表分表', i, '''');
         PREPARE create_stmt FROM @create_sql;
         EXECUTE create_stmt;
         DEALLOCATE PREPARE create_stmt;
@@ -1215,6 +1201,30 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 
 -- ============================================================================
+-- 增量迁移：为已存在的 order_items_X 添加 order_status、prepayment_amount
+-- 仅在已有库升级时执行（新建库无需执行）
+-- ============================================================================
+/*
+DROP PROCEDURE IF EXISTS alter_order_items_add_columns;
+DELIMITER //
+CREATE PROCEDURE alter_order_items_add_columns()
+BEGIN
+    DECLARE i INT DEFAULT 0;
+    WHILE i < 10 DO
+        SET @tbl = CONCAT('order_items_', i);
+        SET @sql = CONCAT('ALTER TABLE `', @tbl, '` ADD COLUMN `order_status` varchar(50) NOT NULL DEFAULT '''' COMMENT ''子单状态'' AFTER `item_price`, ADD COLUMN `prepayment_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''子单预付款金额'' AFTER `order_status`');
+        PREPARE stmt FROM @sql;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+        SET i = i + 1;
+    END WHILE;
+END //
+DELIMITER ;
+CALL alter_order_items_add_columns();
+DROP PROCEDURE IF EXISTS alter_order_items_add_columns;
+*/
+
+-- ============================================================================
 -- 附录：表清单与分表规则说明
 -- ============================================================================
 --
@@ -1233,7 +1243,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 --   11    shop_owner_commission_accounts   店主佣金账户表
 --   12    platform_commission_accounts     平台佣金账户表(单例)
 --   13    penalty_bonus_accounts           罚补账户表
---   14    escrow_accounts                  托管账户表
+--   14    escrow_accounts                  托管账户表（已经删除）
 --   15    collection_accounts              收款账户表
 --   16    withdraw_applications            提现申请表
 --   17    recharge_record                  充值记录表

@@ -808,6 +808,7 @@ type ReturnDetailResponse struct {
 			Images       []string `json:"images"`
 			Amount       int     `json:"amount"`
 			ItemPrice    float64 `json:"item_price"`
+			EscrowAmount float64 `json:"escrow_amount"` // 子单 escrow 金额（若有，用于部分退款返还预付款）
 			IsAddOnDeal  bool    `json:"is_add_on_deal"`
 			IsMainItem   bool    `json:"is_main_item"`
 			AddOnDealID  int64   `json:"add_on_deal_id"`

@@ -18,20 +18,22 @@ const (
 	OrderStatusShipped        = "SHIPPED"         // 已发货
 	OrderStatusCompleted      = "COMPLETED"       // 已完成
 	OrderStatusInCancel       = "IN_CANCEL"       // 取消中
-	OrderStatusCancelled      = "CANCELLED"       // 已取消
-	OrderStatusInvoicePending = "INVOICE_PENDING" // 待开票
+	OrderStatusCancelled        = "CANCELLED"           // 已取消
+	OrderStatusCancelledBeforeShip = "CANCELLED_BEFORE_SHIP" // 发货前取消（全额退款/退货/取消且运营未发货）
+	OrderStatusInvoicePending   = "INVOICE_PENDING"     // 待开票
 )
 
 // OrderStatusPriority 订单状态优先级（数字越大越靠后，不可逆）
 var OrderStatusPriority = map[string]int{
-	OrderStatusUnpaid:         1,
-	OrderStatusInvoicePending: 2,
-	OrderStatusReadyToShip:    3,
-	OrderStatusProcessed:      4,
-	OrderStatusShipped:        5,
-	OrderStatusCompleted:      6,
-	OrderStatusInCancel:       7,
-	OrderStatusCancelled:      8,
+	OrderStatusUnpaid:            1,
+	OrderStatusInvoicePending:    2,
+	OrderStatusReadyToShip:       3,
+	OrderStatusProcessed:         4,
+	OrderStatusShipped:           5,
+	OrderStatusCompleted:         6,
+	OrderStatusInCancel:          7,
+	OrderStatusCancelledBeforeShip: 8,
+	OrderStatusCancelled:         9,
 }
 
 // ==================== 发货状态 ====================
@@ -92,6 +94,7 @@ const (
 	KeyPrepaymentNotified = "balance:prepayment:notified:%d"     // shopID — 预付款不足通知去重（避免短时间重复通知）
 	KeyReturnLock         = "shopee:lock:return:%d:%s"           // shopID, returnSN — 退货退款处理锁
 	KeyReturnDedup        = "shopee:webhook:return:dedup:%d:%s:%d" // shopID, returnSN, eventCode — 退货Webhook去重（不含timestamp，防止虾皮重试绕过去重）
+	KeyShopowerOrderStats = "balance:shopower:order_stats:%d"     // admin_id — 店主订单统计缓存（全部/未结算/已结算/账款调整）
 )
 
 // ==================== 缓存过期时间 ====================
@@ -109,6 +112,7 @@ const (
 	ReturnLockExpire   = 30 * time.Second // 退货退款处理锁过期时间
 	OrderUpdateTimeTTL         = 24 * time.Hour
 	PrepaymentNotifiedCooldown = 30 * time.Minute // 预付款不足通知冷却：30分钟内不重复通知
+	ShopowerOrderStatsExpire  = 1 * time.Hour     // 店主订单统计缓存 TTL：1 小时
 )
 
 // ==================== 分页默认值 ====================
@@ -173,6 +177,7 @@ const (
 
 const (
 	RouteShopowerOrders            = "/orders"
+	RouteShopowerOrderStats        = "/orders/stats"
 	RouteShopowerOrderSync         = "/orders/sync"
 	RouteShopowerOrderReadyToShip  = "/orders/ready-to-ship"
 	RouteShopowerOrderDetail       = "/orders/:shop_id/:order_sn"

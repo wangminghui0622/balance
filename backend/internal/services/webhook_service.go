@@ -276,11 +276,32 @@ func (s *WebhookService) HandleOrderCancel(ctx context.Context, shopID uint64, d
 
 	s.LogWebhook(ctx, shopID, consts.WebhookBuyerCancelOrder, "order_cancel", data)
 
-	// 更新订单状态（检查 status_locked，防止覆盖店主手动锁定的状态）
 	orderTable := database.GetOrderTableName(shopID)
+	shipmentRecordTable := database.GetOrderShipmentRecordTableName(shopID)
+	orderItemTable := database.GetOrderItemTableName(shopID)
+
+	// 判断是否已发货（运营未发货 = 发货前取消）
+	var shipmentRecord models.OrderShipmentRecord
+	shipped := s.db.Table(shipmentRecordTable).Where("shop_id = ? AND order_sn = ?", shopID, cancelData.OrderSN).
+		First(&shipmentRecord).Error == nil && shipmentRecord.Status == models.ShipmentRecordStatusShipped
+
+	var newOrderStatus string
+	if shipped {
+		newOrderStatus = consts.OrderStatusCancelled
+	} else {
+		newOrderStatus = consts.OrderStatusCancelledBeforeShip
+	}
+
+	// 更新订单状态（检查 status_locked）
 	s.db.Table(orderTable).
 		Where("shop_id = ? AND order_sn = ? AND status_locked = false", shopID, cancelData.OrderSN).
-		Update("order_status", consts.OrderStatusCancelled)
+		Update("order_status", newOrderStatus)
+
+	// 发货前取消：所有子单改为 CANCELLED_BEFORE_SHIP
+	if !shipped {
+		s.db.Table(orderItemTable).Where("shop_id = ? AND order_sn = ?", shopID, cancelData.OrderSN).
+			Update("order_status", consts.OrderStatusCancelledBeforeShip)
+	}
 
 	shipmentTable := database.GetShipmentTableName(shopID)
 	s.db.Table(shipmentTable).
@@ -290,7 +311,7 @@ func (s *WebhookService) HandleOrderCancel(ctx context.Context, shopID uint64, d
 			"remark":      fmt.Sprintf("订单已取消: %s - %s", cancelData.CancelBy, cancelData.CancelReason),
 		})
 
-	// 处理预付款解冻 (如果订单已发货且有冻结金额)
+	// 处理预付款返还（prepayment_status=1 时返还）
 	s.handleOrderCancelRefund(ctx, shopID, cancelData.OrderSN, cancelData.CancelBy, cancelData.CancelReason)
 
 	rdb := database.GetRedis()
@@ -299,43 +320,46 @@ func (s *WebhookService) HandleOrderCancel(ctx context.Context, shopID uint64, d
 }
 
 // handleOrderCancelRefund 处理订单取消退款 - 使用分表
+// 预付款在 READY_TO_SHIP 时已冻结，取消时需解冻（无论是否已有发货记录）
 func (s *WebhookService) handleOrderCancelRefund(ctx context.Context, shopID uint64, orderSN string, cancelBy string, cancelReason string) {
-	// 查找发货记录
-	shipmentRecordTable := database.GetOrderShipmentRecordTableName(shopID)
-	var shipmentRecord models.OrderShipmentRecord
-	err := s.db.Table(shipmentRecordTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&shipmentRecord).Error
-	if err != nil {
-		// 没有发货记录，无需处理
+	orderTable := database.GetOrderTableName(shopID)
+	var order models.Order
+	if err := s.db.Table(orderTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).
+		Select("id", "shop_id", "order_sn", "prepayment_status", "prepayment_amount", "total_amount").First(&order).Error; err != nil {
+		return
+	}
+	// 仅当预付款已冻结时解冻（prepayment_status=1）
+	if order.PrepaymentStatus != models.PrepaymentSufficient {
+		return
+	}
+	unfreezeAmount := order.PrepaymentAmount
+	if !unfreezeAmount.IsPositive() {
+		unfreezeAmount = order.TotalAmount
+	}
+	// 获取店主 ID（从店铺表）
+	var shop models.Shop
+	if err := s.db.Where("shop_id = ?", shopID).Select("admin_id").First(&shop).Error; err != nil || shop.AdminID == 0 {
 		return
 	}
 
-	// 只处理已发货但未结算的订单
-	if shipmentRecord.Status != models.ShipmentRecordStatusShipped {
-		return
-	}
-
-	// 解冻预付款
 	accountService := NewAccountService()
-	_, err = accountService.UnfreezePrepayment(ctx, shipmentRecord.ShopOwnerID, shipmentRecord.FrozenAmount, orderSN,
+	_, err := accountService.UnfreezePrepayment(ctx, shop.AdminID, unfreezeAmount, orderSN,
 		fmt.Sprintf("订单取消退款: %s - %s", cancelBy, cancelReason))
 	if err != nil {
 		s.logError(ctx, shopID, consts.WebhookBuyerCancelOrder, "unfreeze_error", err)
 		return
 	}
 
-	// 从托管账户退回
-	err = accountService.TransferFromEscrow(ctx, shipmentRecord.ShopOwnerID, shipmentRecord.FrozenAmount, orderSN, "订单取消退回")
-	if err != nil {
-		s.logError(ctx, shopID, consts.WebhookBuyerCancelOrder, "escrow_refund_error", err)
-	}
-
-	// 更新发货记录状态
-	s.db.Table(shipmentRecordTable).
-		Where("id = ?", shipmentRecord.ID).
-		Updates(map[string]interface{}{
+	// 若有发货记录且已发货，更新为已取消
+	shipmentRecordTable := database.GetOrderShipmentRecordTableName(shopID)
+	var shipmentRecord models.OrderShipmentRecord
+	if s.db.Table(shipmentRecordTable).Where("shop_id = ? AND order_sn = ?", shopID, orderSN).First(&shipmentRecord).Error == nil &&
+		shipmentRecord.Status == models.ShipmentRecordStatusShipped {
+		s.db.Table(shipmentRecordTable).Where("id = ?", shipmentRecord.ID).Updates(map[string]interface{}{
 			"status": models.ShipmentRecordStatusCancelled,
 			"remark": fmt.Sprintf("订单取消: %s - %s", cancelBy, cancelReason),
 		})
+	}
 }
 
 // HandleReturn 处理退货退款事件（退货创建 / 退货状态变更）

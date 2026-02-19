@@ -28,16 +28,16 @@
                 <span v-if="order.shopeeStatus" class="info-item info-item-right">虾皮订单状态: {{ order.shopeeStatus }}</span>
               </div>
             </div>
-            <div v-if="order.product" class="products-section">
-              <div class="product-item">
-                <el-avatar :size="80" shape="square" :src="order.product.image" class="product-image" />
+            <div v-if="order.products && order.products.length > 0" class="products-section">
+              <div v-for="(product, pIndex) in order.products" :key="pIndex" class="product-item">
+                <el-avatar :size="80" shape="square" :src="product.image" class="product-image" />
                 <div class="product-details">
-                  <div class="product-name">{{ order.product.name }}</div>
-                  <div class="product-specs">颜色: {{ order.product.color }} 尺寸: {{ order.product.size }}</div>
+                  <div class="product-name">{{ product.name }}</div>
+                  <div class="product-specs">颜色: {{ product.color }} 尺寸: {{ product.size }}</div>
                   <div class="product-price-info">
-                    <span>单价: NT${{ order.product.unitPrice }}</span>
-                    <span>数量: {{ order.product.quantity }}</span>
-                    <span>小计: {{ order.product.subtotal }}</span>
+                    <span>单价: NT${{ product.unitPrice }}</span>
+                    <span>数量: {{ product.quantity }}</span>
+                    <span>小计: {{ product.subtotal }}</span>
                   </div>
                 </div>
               </div>
@@ -77,16 +77,16 @@
                 <span v-if="order.shopeeStatus" class="info-item info-item-right">虾皮订单状态: {{ order.shopeeStatus }}</span>
               </div>
             </div>
-            <div v-if="order.product" class="products-section">
-              <div class="product-item">
-                <el-avatar :size="80" shape="square" :src="order.product.image" class="product-image" />
+            <div v-if="order.products && order.products.length > 0" class="products-section">
+              <div v-for="(product, pIndex) in order.products" :key="pIndex" class="product-item">
+                <el-avatar :size="80" shape="square" :src="product.image" class="product-image" />
                 <div class="product-details">
-                  <div class="product-name">{{ order.product.name }}</div>
-                  <div class="product-specs">颜色: {{ order.product.color }} 尺寸: {{ order.product.size }}</div>
+                  <div class="product-name">{{ product.name }}</div>
+                  <div class="product-specs">颜色: {{ product.color }} 尺寸: {{ product.size }}</div>
                   <div class="product-price-info">
-                    <span>单价: NT${{ order.product.unitPrice }}</span>
-                    <span>数量: {{ order.product.quantity }}</span>
-                    <span>小计: {{ order.product.subtotal }}</span>
+                    <span>单价: NT${{ product.unitPrice }}</span>
+                    <span>数量: {{ product.quantity }}</span>
+                    <span>小计: {{ product.subtotal }}</span>
                   </div>
                 </div>
               </div>
@@ -123,16 +123,16 @@
                 <span class="info-item">店铺名称: {{ order.storeName }}</span>
               </div>
             </div>
-            <div v-if="order.product" class="products-section">
-              <div class="product-item">
-                <el-avatar :size="80" shape="square" :src="order.product.image" class="product-image" />
+            <div v-if="order.products && order.products.length > 0" class="products-section">
+              <div v-for="(product, pIndex) in order.products" :key="pIndex" class="product-item">
+                <el-avatar :size="80" shape="square" :src="product.image" class="product-image" />
                 <div class="product-details">
-                  <div class="product-name">{{ order.product.name }}</div>
-                  <div class="product-specs">颜色: {{ order.product.color }} 尺寸: {{ order.product.size }}</div>
+                  <div class="product-name">{{ product.name }}</div>
+                  <div class="product-specs">颜色: {{ product.color }} 尺寸: {{ product.size }}</div>
                   <div class="product-price-info">
-                    <span>单价: NT${{ order.product.unitPrice }}</span>
-                    <span>数量: {{ order.product.quantity }}</span>
-                    <span>小计: {{ order.product.subtotal }}</span>
+                    <span>单价: NT${{ product.unitPrice }}</span>
+                    <span>数量: {{ product.quantity }}</span>
+                    <span>小计: {{ product.subtotal }}</span>
                   </div>
                 </div>
               </div>
@@ -145,12 +145,12 @@
         </div>
       </el-tab-pane>
     </el-tabs>
-    <a href="#" class="all-orders-link">
+    <router-link to="/shopowner/orders" class="all-orders-link">
       所有订单
       <svg class="arrow-icon" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-    </a>
+    </router-link>
     </div>
   </el-card>
 </template>
@@ -176,7 +176,7 @@ interface Order {
   orderTime: string
   storeName: string
   storeId?: string
-  product?: Product
+  products?: Product[]
   orderAmount: string
   status?: string
   prepaymentStatus: number
@@ -209,21 +209,16 @@ const apiOrders = ref<ApiOrder[]>([])
 
 // 将API订单数据转换为显示格式
 const transformOrder = (apiOrder: ApiOrder): Order => {
-  // 获取第一个商品作为显示
-  const firstItem = apiOrder.items?.[0]
-  let product: Product | undefined
-  
-  if (firstItem) {
-    product = {
-      image: '',
-      name: firstItem.item_name,
-      color: firstItem.model_name?.split(',')[0] || '-',
-      size: firstItem.model_name?.split(',')[1] || '-',
-      unitPrice: firstItem.item_price,
-      quantity: firstItem.quantity,
-      subtotal: (parseFloat(firstItem.item_price) * firstItem.quantity).toFixed(2)
-    }
-  }
+  // 转换所有商品
+  const products: Product[] = (apiOrder.items || []).map(item => ({
+    image: '',
+    name: item.item_name,
+    color: item.model_name?.split(',')[0] || '-',
+    size: item.model_name?.split(',')[1] || '-',
+    unitPrice: item.item_price,
+    quantity: item.quantity,
+    subtotal: (parseFloat(item.item_price) * item.quantity).toFixed(2)
+  }))
   
   // 订单状态映射
   const statusMap: Record<string, string> = {
@@ -242,7 +237,7 @@ const transformOrder = (apiOrder: ApiOrder): Order => {
     orderTime: formatDateTime(apiOrder.create_time || apiOrder.created_at),
     storeId: apiOrder.shop_id.toString(),
     storeName: `店铺 ${apiOrder.shop_id}`,
-    product,
+    products: products.length > 0 ? products : undefined,
     orderAmount: apiOrder.total_amount,
     status: apiOrder.order_status,
     prepaymentStatus: apiOrder.prepayment_status ?? 0,

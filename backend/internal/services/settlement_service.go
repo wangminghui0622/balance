@@ -142,28 +142,23 @@ func (s *SettlementService) SettleOrder(ctx context.Context, shopID uint64, orde
 }
 
 // executeSettlementInTx 执行结算资金划转（复用调用方事务，避免嵌套独立事务导致连接池死锁）
+// 预付款在订单 READY_TO_SHIP 时已冻结，发货不转托管，结算直接按 orders_x/发货记录分账，不操作托管账户
 func (s *SettlementService) executeSettlementInTx(outerTx *gorm.DB, ctx context.Context, settlement *models.OrderSettlement, shipmentRecord *models.OrderShipmentRecord) error {
-	// 1. 从店铺老板冻结金额中扣除 (结算给运营)
+	// 1. 从店铺老板冻结金额中扣除 (结算预付款消耗，与 orders_x 一致)
 	_, err := s.accountService.SettlePrepaymentInTx(outerTx, ctx, settlement.ShopOwnerID, shipmentRecord.FrozenAmount, settlement.OrderSN,
 		fmt.Sprintf("订单结算-成本%s", settlement.TotalCost.String()))
 	if err != nil {
 		return fmt.Errorf("扣除店铺老板预付款失败: %w", err)
 	}
 
-	// 2. 从托管账户转出 (发货时已转入托管)
-	err = s.accountService.TransferFromEscrowInTx(outerTx, ctx, settlement.ShopOwnerID, shipmentRecord.FrozenAmount, settlement.OrderSN, "订单结算转出")
-	if err != nil {
-		return fmt.Errorf("托管账户转出失败: %w", err)
-	}
-
-	// 3. 给运营账户增加收入 (成本 + 运营分成)
+	// 2. 给运营账户增加收入 (成本 + 运营分成)
 	_, err = s.accountService.AddOperatorIncomeInTx(outerTx, ctx, settlement.OperatorID, settlement.OperatorIncome, settlement.OrderSN,
 		fmt.Sprintf("订单结算-成本%s+分成%s", settlement.TotalCost.String(), settlement.OperatorShare.String()))
 	if err != nil {
 		return fmt.Errorf("增加运营收入失败: %w", err)
 	}
 
-	// 4. 给店主佣金账户增加收入 (店主分成)
+	// 3. 给店主佣金账户增加收入 (店主分成)
 	if settlement.ShopOwnerShare.GreaterThan(decimal.Zero) {
 		_, err = s.accountService.AddShopOwnerCommissionInTx(outerTx, ctx, settlement.ShopOwnerID, settlement.ShopOwnerShare, settlement.OrderSN,
 			fmt.Sprintf("订单结算-利润分成%s%%", settlement.ShopOwnerShareRate.String()))
@@ -172,7 +167,7 @@ func (s *SettlementService) executeSettlementInTx(outerTx *gorm.DB, ctx context.
 		}
 	}
 
-	// 5. 给平台佣金账户增加收入 (平台分成)
+	// 4. 给平台佣金账户增加收入 (平台分成)
 	if settlement.PlatformShare.GreaterThan(decimal.Zero) {
 		_, err = s.accountService.AddPlatformCommissionInTx(outerTx, ctx, settlement.PlatformShare, settlement.OrderSN,
 			fmt.Sprintf("订单结算-平台分成%s%%", settlement.PlatformShareRate.String()))

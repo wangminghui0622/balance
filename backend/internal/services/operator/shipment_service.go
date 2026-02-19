@@ -43,16 +43,16 @@ func NewShipmentService() *ShipmentService {
 type ShipOrderRequest struct {
 	ShopID       uint64          `json:"shop_id" binding:"required"`
 	OrderSN      string          `json:"order_sn" binding:"required"`
-	GoodsCost    decimal.Decimal `json:"goods_cost" binding:"required"`    // 商品成本
-	ShippingCost decimal.Decimal `json:"shipping_cost"`                    // 运费成本
-	PickupInfo   *PickupInfo     `json:"pickup_info"`                      // 取件信息
+	GoodsCost    decimal.Decimal `json:"goods_cost" binding:"required"` // 商品成本
+	ShippingCost decimal.Decimal `json:"shipping_cost"`                 // 运费成本
+	PickupInfo   *PickupInfo     `json:"pickup_info"`                   // 取件信息
 }
 
 // PickupInfo 取件信息
 type PickupInfo struct {
-	AddressID     uint64 `json:"address_id"`
-	PickupTimeID  string `json:"pickup_time_id"`
-	TrackingNo    string `json:"tracking_no"`
+	AddressID    uint64 `json:"address_id"`
+	PickupTimeID string `json:"pickup_time_id"`
+	TrackingNo   string `json:"tracking_no"`
 }
 
 // ShipOrder 运营发货 (含预付款检查)
@@ -75,7 +75,12 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, operatorID int64, req *
 		return nil, fmt.Errorf("订单状态不是待发货，当前状态: %s", order.OrderStatus)
 	}
 
-	// 4. 检查是否已有发货记录 - 使用分表
+	// 4. 检查预付款是否充足（订单进入系统时已扣预付款，仅允许 prepayment_status=1 发货）
+	if order.PrepaymentStatus != models.PrepaymentSufficient {
+		return nil, fmt.Errorf("预付款不足无法发货，请通知店主充值后重试")
+	}
+
+	// 5. 检查是否已有发货记录 - 使用分表
 	shipmentRecordTable := database.GetOrderShipmentRecordTableName(req.ShopID)
 	var existingRecord models.OrderShipmentRecord
 	if err := s.db.Table(shipmentRecordTable).Where("order_sn = ?", req.OrderSN).First(&existingRecord).Error; err == nil {
@@ -87,25 +92,17 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, operatorID int64, req *
 		}
 	}
 
-	// 5. 计算总成本
+	// 6. 冻结金额与成本：以 orders_x 为准（订单入系统时已冻结，此处仅记录）
+	frozenAmount := order.PrepaymentAmount
+	if !frozenAmount.IsPositive() {
+		frozenAmount = order.TotalAmount
+	}
 	totalCost := req.GoodsCost.Add(req.ShippingCost)
-
-	// 6. 检查店铺老板预付款余额
-	balance, _, err := s.accountService.GetPrepaymentBalance(ctx, relation.ShopOwnerID)
-	if err != nil {
-		return nil, fmt.Errorf("获取预付款余额失败: %w", err)
-	}
-	if balance.LessThan(totalCost) {
-		return nil, fmt.Errorf("店铺老板预付款余额不足，当前余额: %s, 需要: %s", balance.String(), totalCost.String())
+	if !totalCost.IsPositive() {
+		totalCost = frozenAmount
 	}
 
-	// 7. 冻结预付款
-	freezeTx, err := s.accountService.FreezePrepayment(ctx, relation.ShopOwnerID, totalCost, req.OrderSN, fmt.Sprintf("发货冻结-订单%s", req.OrderSN))
-	if err != nil {
-		return nil, fmt.Errorf("冻结预付款失败: %w", err)
-	}
-
-	// 8. 创建发货记录
+	// 7. 创建发货记录（不再次冻结预付款，不操作托管账户）
 	recordID, _ := s.idGenerator.GenerateShipmentRecordID(ctx)
 	record := &models.OrderShipmentRecord{
 		ID:                  uint64(recordID),
@@ -118,33 +115,27 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, operatorID int64, req *
 		ShippingCost:        req.ShippingCost,
 		TotalCost:           totalCost,
 		Currency:            order.Currency,
-		FrozenAmount:        totalCost,
-		FrozenTransactionID: freezeTx.ID,
+		FrozenAmount:        frozenAmount,
+		FrozenTransactionID: 0,
 		Status:              models.ShipmentRecordStatusPending,
 	}
 	if err := s.db.Table(shipmentRecordTable).Create(record).Error; err != nil {
-		// 回滚冻结
-		s.accountService.UnfreezePrepayment(ctx, relation.ShopOwnerID, totalCost, req.OrderSN, "发货失败回滚")
 		return nil, fmt.Errorf("创建发货记录失败: %w", err)
 	}
 
-	// 9. 调用 Shopee 发货 API
+	// 8. 调用 Shopee 发货 API
 	err = s.callShopeeShipOrder(ctx, req.ShopID, req.OrderSN, req.PickupInfo)
 	if err != nil {
-		// 发货失败，更新记录状态
 		record.Status = models.ShipmentRecordStatusFailed
 		record.Remark = err.Error()
 		s.db.Table(shipmentRecordTable).Where("id = ?", record.ID).Updates(map[string]interface{}{
 			"status": record.Status,
 			"remark": record.Remark,
 		})
-
-		// 解冻预付款
-		s.accountService.UnfreezePrepayment(ctx, relation.ShopOwnerID, totalCost, req.OrderSN, "发货失败回滚")
-		return nil, fmt.Errorf("调用Shopee发货失败: %w", err)
+		return nil, fmt.Errorf("调用Shopee发货失败: %w（可由运营重试）", err)
 	}
 
-	// 10. 发货成功，更新记录
+	// 9. 发货成功，更新记录（不转入托管账户，结算时直接按 orders_x / 发货记录分账）
 	now := time.Now()
 	record.Status = models.ShipmentRecordStatusShipped
 	record.ShippedAt = &now
@@ -155,15 +146,7 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, operatorID int64, req *
 		return nil, fmt.Errorf("更新发货记录失败: %w", err)
 	}
 
-	// 11. 转入托管账户 (冻结金额转入托管，待结算时分账)
-	err = s.accountService.TransferToEscrow(ctx, relation.ShopOwnerID, totalCost, req.OrderSN, fmt.Sprintf("发货托管-订单%s", req.OrderSN))
-	if err != nil {
-		// 托管失败不影响发货流程，记录日志即可
-		record.Remark = fmt.Sprintf("托管转入失败: %s", err.Error())
-		s.db.Table(shipmentRecordTable).Where("id = ?", record.ID).Update("remark", record.Remark)
-	}
-
-	// 12. 获取物流单号
+	// 10. 异步获取物流单号
 	go s.fetchTrackingNumber(req.ShopID, req.OrderSN, record.ID)
 
 	return record, nil
@@ -198,7 +181,7 @@ func (s *ShipmentService) callShopeeShipOrder(ctx context.Context, shopID uint64
 
 	// 调用 Shopee API
 	client := shopee.NewClient(shop.Region)
-	
+
 	trackingNo := ""
 	if pickupInfo != nil && pickupInfo.TrackingNo != "" {
 		trackingNo = pickupInfo.TrackingNo
