@@ -22,7 +22,6 @@ const (
 	// TODO: 替换为实际值（从数据库 shop_authorizations 表查询）
 	testShopID      = 226516274 // 替换为店铺的 shop_id
 	testAccessToken = ""        // 替换为该店铺的 access_token
-	testReturnSN    = ""        // 替换为退货单号（可从 get_return_list 获取，或从数据库 returns 表查询）
 )
 
 // generateTestSign 生成 Shopee API 签名
@@ -38,14 +37,15 @@ func main() {
 		fmt.Println("请先填写 testShopID 和 testAccessToken（从数据库查询）")
 		return
 	}
-	if testReturnSN == "" {
-		fmt.Println("请先填写 testReturnSN（可从 get_return_list 获取，或从数据库 returns 表查询）")
-		return
-	}
 
-	apiPath := "/api/v2/returns/get_return_detail"
+	apiPath := "/api/v2/returns/get_return_list"
 	timestamp := time.Now().Unix()
 	sign := generateTestSign(testPartnerID, apiPath, timestamp, testAccessToken, testShopID, testPartnerKey)
+
+	// 查询最近 30 天的退货
+	now := time.Now()
+	createTimeTo := now.Unix()
+	createTimeFrom := now.AddDate(0, 0, -30).Unix()
 
 	params := url.Values{}
 	params.Set("partner_id", strconv.FormatInt(testPartnerID, 10))
@@ -53,7 +53,9 @@ func main() {
 	params.Set("sign", sign)
 	params.Set("access_token", testAccessToken)
 	params.Set("shop_id", strconv.FormatUint(testShopID, 10))
-	params.Set("return_sn", testReturnSN)
+	params.Set("create_time_from", strconv.FormatInt(createTimeFrom, 10))
+	params.Set("create_time_to", strconv.FormatInt(createTimeTo, 10))
+	params.Set("page_size", "20")
 
 	reqURL := fmt.Sprintf("%s%s?%s", testHost, apiPath, params.Encode())
 	fmt.Printf("请求 URL: %s\n", reqURL)
@@ -83,8 +85,11 @@ func main() {
 	fmt.Printf("响应:\n%s\n", string(formatted))
 
 	if response, ok := prettyJSON["response"].(map[string]interface{}); ok {
-		if refundAmount, ok := response["refund_amount"]; ok {
-			fmt.Printf("\n>>> refund_amount = %v <<<\n", refundAmount)
+		if returnList, ok := response["return_list"].([]interface{}); ok {
+			fmt.Printf("\n>>> return_list 数量 = %d <<<\n", len(returnList))
+		}
+		if more, ok := response["more"].(bool); ok {
+			fmt.Printf(">>> more = %v <<<\n", more)
 		}
 	}
 }

@@ -34,7 +34,6 @@ func generateTestSign(partnerID int64, path string, timestamp int64, accessToken
 }
 
 // TestGetEscrowDetail 测试获取订单结算明细
-// 运行方式: cd backend && go test ./internal/shopee/ -run TestGetEscrowDetail -v
 func main() {
 	if testShopID == 0 || testAccessToken == "" {
 		fmt.Println("请先填写 testShopID 和 testAccessToken（从数据库查询）")
