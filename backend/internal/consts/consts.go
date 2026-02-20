@@ -132,6 +132,7 @@ const (
 	ShopeeMaxTimeRange       = 15 * 24 * 3600
 	ShopeeAPIRateLimit       = 10
 	ShopeeAPIRetryTimes      = 3
+	ShopeeAPIRetryTimesSync  = 5  // 巡检/同步类操作，对临时错误重试更多次
 	ShopeeAPIRetryInterval   = 1000
 )
 
@@ -244,36 +245,4 @@ const (
 const (
 	RoutePlatformOrders      = "/orders"
 	RoutePlatformOrderDetail = "/orders/:shop_id/:order_sn"
-)
-
-// ==================== 兼容旧路由（逐步废弃） ====================
-
-const (
-	RouteShops            = "/shops"
-	RouteShopAuthURL      = "/shops/auth-url"
-	RouteShopBind         = "/shops/bind"
-	RouteShopDetail       = "/shops/:shop_id"
-	RouteShopStatus       = "/shops/:shop_id/status"
-	RouteShopRefreshToken = "/shops/:shop_id/refresh-token"
-)
-
-const (
-	RouteOrders            = "/orders"
-	RouteOrderSync         = "/orders/sync"
-	RouteOrderReadyToShip  = "/orders/ready-to-ship"
-	RouteOrderDetail       = "/orders/:shop_id/:order_sn"
-	RouteOrderRefresh      = "/orders/:shop_id/:order_sn/refresh"
-	RouteOrderForceStatus  = "/orders/:shop_id/:order_sn/force-status"
-	RouteOrderUnlockStatus = "/orders/:shop_id/:order_sn/unlock"
-)
-
-const (
-	RouteShipments             = "/shipments"
-	RouteShipmentShip          = "/shipments/ship"
-	RouteShipmentBatchShip     = "/shipments/batch-ship"
-	RouteShipmentParameter     = "/shipments/shipping-parameter"
-	RouteShipmentTrackingNo    = "/shipments/tracking-number"
-	RouteShipmentDetail        = "/shipments/:shop_id/:order_sn"
-	RouteShipmentSyncLogistics = "/shipments/sync-logistics/:shop_id"
-	RouteShipmentLogistics     = "/shipments/logistics/:shop_id"
 )

@@ -222,9 +222,6 @@ func (s *OrderService) getAccessToken(ctx context.Context, shopID uint64) (strin
 	return auth.AccessToken, nil
 }
 
-
-
-
 // ListOrders 获取订单列表 - 使用分表
 // 语义：「全部订单」= 不传 shop_id、不传 status 时，返回 orders_x 下该 admin 绑定的所有 shop 的所有状态订单（可带 start_time/end_time 筛选）
 func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int64, status, startTime, endTime string, page, pageSize int) ([]models.Order, int64, error) {
@@ -322,14 +319,14 @@ func (s *OrderService) ListOrders(ctx context.Context, adminID int64, shopID int
 
 // OrderStats 店主订单统计（全部/未结算/已结算/账款调整，不限制时间）
 type OrderStats struct {
-	AllOrdersCount    int64   `json:"all_orders_count"`
-	AllOrdersAmount   float64 `json:"all_orders_amount"`
-	UnsettledCount    int64   `json:"unsettled_count"`
-	UnsettledAmount   float64 `json:"unsettled_amount"`
-	SettledCount      int64   `json:"settled_count"`
-	SettledAmount     float64 `json:"settled_amount"`
-	AdjustmentCount   int64   `json:"adjustment_count"`
-	AdjustmentAmount  float64 `json:"adjustment_amount"`
+	AllOrdersCount   int64   `json:"all_orders_count"`
+	AllOrdersAmount  float64 `json:"all_orders_amount"`
+	UnsettledCount   int64   `json:"unsettled_count"`
+	UnsettledAmount  float64 `json:"unsettled_amount"`
+	SettledCount     int64   `json:"settled_count"`
+	SettledAmount    float64 `json:"settled_amount"`
+	AdjustmentCount  int64   `json:"adjustment_count"`
+	AdjustmentAmount float64 `json:"adjustment_amount"`
 }
 
 // ComputeOrderStats 计算该 admin 绑定所有店铺的订单统计（不限制时间，金额为 total_amount 之和）
@@ -726,7 +723,6 @@ func (s *OrderService) RefreshOrderFromAPI(ctx context.Context, shopID uint64, o
 	return s.UpsertOrder(ctx, shopID, shop.Region, &detailResp.Response.OrderList[0])
 }
 
-
 // ==================== 统一订单写入入口 ====================
 
 // UpsertOrder 统一的订单写入入口（Webhook 和 Patrol 巡检共用）
@@ -836,18 +832,19 @@ func (s *OrderService) UpsertOrder(ctx context.Context, shopID uint64, region st
 				return fmt.Errorf("生成订单商品ID失败: %w", err)
 			}
 			orderItem := models.OrderItem{
-				ID:        uint64(itemID),
-				OrderID:   order.ID,
-				ShopID:    shopID,
-				OrderSN:   detail.OrderSN,
-				ItemID:    uint64(item.ItemID),
-				ItemName:  item.ItemName,
-				ItemSKU:   item.ItemSKU,
-				ModelID:   uint64(item.ModelID),
-				ModelName: item.ModelName,
-				ModelSKU:  item.ModelSKU,
-				Quantity:  item.ModelQuantity,
-				ItemPrice: decimal.NewFromFloat(item.ModelOriginalPrice),
+				ID:          uint64(itemID),
+				OrderID:     order.ID,
+				ShopID:      shopID,
+				OrderSN:     detail.OrderSN,
+				ItemID:      uint64(item.ItemID),
+				ItemName:    item.ItemName,
+				ItemSKU:     item.ItemSKU,
+				ModelID:     uint64(item.ModelID),
+				ModelName:   item.ModelName,
+				ModelSKU:    item.ModelSKU,
+				Quantity:    item.ModelQuantity,
+				ItemPrice:   decimal.NewFromFloat(item.ModelOriginalPrice),
+				OrderStatus: order.OrderStatus,
 			}
 			if err := tx.Table(orderItemTable).Create(&orderItem).Error; err != nil {
 				return err
@@ -898,14 +895,14 @@ func (s *OrderService) UpsertOrder(ctx context.Context, shopID uint64, region st
 
 				// 将费用明细写入订单表
 				feeUpdates := map[string]interface{}{
-					"escrow_amount_snapshot":       escrowAmount,
-					"buyer_paid_shipping_fee":      decimal.NewFromFloat(income.BuyerPaidShippingFee),
-					"original_cost_of_goods_sold":  decimal.NewFromFloat(income.OriginalCostOfGoodsSold),
-					"commission_fee":               decimal.NewFromFloat(income.CommissionFee),
-					"seller_transaction_fee":       decimal.NewFromFloat(income.SellerTransactionFee),
-					"credit_card_transaction_fee":  decimal.NewFromFloat(income.CreditCardTransactionFee),
-					"service_fee":                  decimal.NewFromFloat(income.ServiceFee),
-					"prepayment_amount":            escrowAmount, // 预付款扣除金额 = escrow_amount
+					"escrow_amount_snapshot":      escrowAmount,
+					"buyer_paid_shipping_fee":     decimal.NewFromFloat(income.BuyerPaidShippingFee),
+					"original_cost_of_goods_sold": decimal.NewFromFloat(income.OriginalCostOfGoodsSold),
+					"commission_fee":              decimal.NewFromFloat(income.CommissionFee),
+					"seller_transaction_fee":      decimal.NewFromFloat(income.SellerTransactionFee),
+					"credit_card_transaction_fee": decimal.NewFromFloat(income.CreditCardTransactionFee),
+					"service_fee":                 decimal.NewFromFloat(income.ServiceFee),
+					"prepayment_amount":           escrowAmount, // 预付款扣除金额 = escrow_amount
 				}
 				if err := s.db.Table(orderTable).
 					Where("shop_id = ? AND order_sn = ?", shopID, detail.OrderSN).
@@ -936,7 +933,7 @@ func (s *OrderService) UpsertOrder(ctx context.Context, shopID uint64, region st
 
 // PatrolOrders 巡检订单（轻量比对模式，只对遗漏/不一致的订单拉详情写入）
 // 返回值：found = Shopee 侧订单总数, patched = 实际补录写入的订单数
-func (s *OrderService) PatrolOrders(ctx context.Context, shop *models.Shop, timeFrom, timeTo time.Time) (found int, patched int, err error) {
+func (s *OrderService) PatrolOrders(ctx context.Context, shop *models.Shop, begin, end time.Time) (found int, patched int, err error) {
 	shopID := shop.ShopID
 	region := shop.Region
 
@@ -948,19 +945,19 @@ func (s *OrderService) PatrolOrders(ctx context.Context, shop *models.Shop, time
 
 	// Shopee API 单次查询最多覆盖 15 天，超过则拆分为多个时间段依次巡检
 	maxRange := int64(consts.ShopeeMaxTimeRange)
-	fromTs := timeFrom.Unix()
-	toTs := timeTo.Unix()
+	begin_ := begin.Unix()
+	end_ := end.Unix()
 
 	// 按 15 天为一段，循环处理每段时间范围
-	for fromTs < toTs {
+	for begin_ < end_ {
 		// 计算本段结束时间，不超过总截止时间
-		endTs := fromTs + maxRange
-		if endTs > toTs {
-			endTs = toTs
+		endTmp := begin_ + maxRange
+		if endTmp > end_ {
+			endTmp = end_
 		}
 
 		// 执行单段巡检，累加 found 和 patched 计数
-		f, p, segErr := s.patrolOrdersInRange(ctx, shopID, region, accessToken, fromTs, endTs)
+		f, p, segErr := s.patrolOrdersInRange(ctx, shopID, region, accessToken, begin_, endTmp)
 		found += f
 		patched += p
 		// 任何一段出错则提前返回，已累加的计数仍然返回
@@ -968,7 +965,7 @@ func (s *OrderService) PatrolOrders(ctx context.Context, shop *models.Shop, time
 			return found, patched, segErr
 		}
 		// 推进到下一段
-		fromTs = endTs
+		begin_ = endTmp
 	}
 
 	// 全部段完成后，更新 shops 表的 last_sync_at，下次巡检从此时间开始
@@ -976,134 +973,137 @@ func (s *OrderService) PatrolOrders(ctx context.Context, shop *models.Shop, time
 	return found, patched, nil
 }
 
+// patrolOrderItem 巡检时使用的订单摘要（OrderSN + Status）
+type patrolOrderItem struct {
+	OrderSN string
+	Status  string
+}
+
 // patrolOrdersInRange 在单个时间段内巡检订单（分页拉取 → 比对 → 补录）
 func (s *OrderService) patrolOrdersInRange(ctx context.Context, shopID uint64, region, accessToken string, timeFrom, timeTo int64) (found int, patched int, err error) {
-	// 创建 Shopee API 客户端（根据 region 选择对应的 API Host）
 	client := shopee.NewClient(region)
-	// 游标分页：初始为空字符串，后续使用 Shopee 返回的 next_cursor
 	cursor := ""
-	// 每页最多拉取 100 条订单号（Shopee API 上限）
 	pageSize := consts.ShopeeOrderListPageSize
-
-	// 分页循环：持续拉取直到 Shopee 返回 more=false 或列表为空
 	for {
-		// 调用前等待限流令牌，防止触发 Shopee API 频率限制
-		if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
-			return found, patched, fmt.Errorf("限流等待被取消: %w", err)
-		}
-
-		// 调用 Shopee GetOrderList，获取本页的订单号 + 订单状态（轻量接口，不含详情）
-		var listResp *shopee.OrderListResponse
-		apiErr := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
-			var err error
-			listResp, err = client.GetOrderList(accessToken, shopID, "create_time", timeFrom, timeTo, pageSize, cursor, "")
-			return err
-		})
+		listResp, apiErr := s.fetchOrderListPage(ctx, client, accessToken, shopID, timeFrom, timeTo, pageSize, cursor)
 		if apiErr != nil {
-			return found, patched, fmt.Errorf("获取订单列表失败: %w", apiErr)
+			return found, patched, apiErr
 		}
-
-		// 本页无数据，结束分页
 		if len(listResp.Response.OrderList) == 0 {
 			break
 		}
-
-		// 将 Shopee 返回的订单号和状态收集到结构体切片中
-		type shopeeOrder struct {
-			OrderSN string
-			Status  string
-		}
-		var shopeeOrders []shopeeOrder
-		for _, o := range listResp.Response.OrderList {
-			shopeeOrders = append(shopeeOrders, shopeeOrder{OrderSN: o.OrderSN, Status: o.OrderStatus})
-		}
-		// 累加 Shopee 侧订单总数
-		found += len(shopeeOrders)
-
-		// 提取本页所有订单号，用于批量查询 DB
-		orderSNs := make([]string, len(shopeeOrders))
-		for i, o := range shopeeOrders {
-			orderSNs[i] = o.OrderSN
-		}
-
-		// 根据 shopID 定位分表，批量查出 DB 中已有的订单号和状态
-		orderTable := database.GetOrderTableName(shopID)
-		var dbOrders []models.Order
-		s.db.Table(orderTable).
-			Select("order_sn", "order_status").
-			Where("shop_id = ? AND order_sn IN ?", shopID, orderSNs).
-			Find(&dbOrders)
-
-		// 构建 DB 订单状态 map：order_sn → order_status，用于快速比对
-		dbMap := make(map[string]string, len(dbOrders))
-		for _, o := range dbOrders {
-			dbMap[o.OrderSN] = o.OrderStatus
-		}
-
-		// 逐条比对 Shopee 和 DB，筛出需要补录的订单号
-		var needPatch []string
-		for _, so := range shopeeOrders {
-			dbStatus, exists := dbMap[so.OrderSN]
-			if !exists {
-				// 情况 1：DB 中不存在该订单（Webhook 遗漏），需要新建
-				needPatch = append(needPatch, so.OrderSN)
-			} else if dbStatus != so.Status {
-				// 情况 2：DB 中的状态落后于 Shopee（如 Webhook 丢失状态更新），需要更新
-				// UpsertOrder 内部有状态优先级判断，不会回退到更低状态
-				needPatch = append(needPatch, so.OrderSN)
-			}
-		}
-
-		// 如果有需要补录的订单，分批拉取详情并写入 DB
+		//从虾皮获取的订单和对应的状态(n个)
+		items := s.toPatrolOrderItems(listResp)
+		found += len(items)
+		//查询数据库中订单和对应的状态(n个)
+		dbMap := s.queryDBOrderStatusMap(shopID, items)
+		//判断虾皮和本地数据库数据是否一致
+		needPatch := s.findOrdersNeedPatch(items, dbMap)
+		//虾皮存在，本地数据库不存在。（说明本地遗漏）
 		if len(needPatch) > 0 {
-			fmt.Printf("[Patrol] 店铺=%d 发现 %d 条遗漏/不一致订单，补录中...\n", shopID, len(needPatch))
-
-			// 每批最多 50 条（Shopee GetOrderDetail API 上限）
-			for i := 0; i < len(needPatch); i += consts.ShopeeOrderDetailMaxSize {
-				// 计算本批的结束下标
-				end := i + consts.ShopeeOrderDetailMaxSize
-				if end > len(needPatch) {
-					end = len(needPatch)
-				}
-				// 截取本批订单号
-				batch := needPatch[i:end]
-
-				// 每批请求前等待限流令牌
-				if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
-					return found, patched, fmt.Errorf("限流等待被取消: %w", err)
-				}
-
-				// 调用 Shopee GetOrderDetail 获取完整订单信息（含商品、地址、金额等）
-				var detailResp *shopee.OrderDetailResponse
-				apiErr := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
-					var err error
-					detailResp, err = client.GetOrderDetail(accessToken, shopID, batch)
-					return err
-				})
-				if apiErr != nil {
-					return found, patched, fmt.Errorf("获取订单详情失败: %w", apiErr)
-				}
-
-				// 逐条调用 UpsertOrder 写入 DB（内含事务、状态优先级控制、预付款检查）
-				for _, detail := range detailResp.Response.OrderList {
-					if err := s.UpsertOrder(ctx, shopID, region, &detail); err != nil {
-						fmt.Printf("[Patrol] 店铺=%d 订单=%s 补录失败: %v\n", shopID, detail.OrderSN, err)
-						continue // 单条失败不影响其他订单
-					}
-					// 补录成功，计数 +1
-					patched++
-				}
+			patchedPage, patchErr := s.patchOrdersInBatches(ctx, client, shopID, region, accessToken, needPatch) //needPatch 为本地没有的。
+			patched += patchedPage
+			if patchErr != nil {
+				return found, patched, patchErr
 			}
 		}
-
-		// 检查是否还有下一页
 		if !listResp.Response.More {
-			break // Shopee 返回 more=false，本段巡检结束
+			break
 		}
-		// 用 Shopee 返回的游标请求下一页
 		cursor = listResp.Response.NextCursor
 	}
-
 	return found, patched, nil
 }
 
+// fetchOrderListPage 拉取一页订单列表（含限流、重试）
+func (s *OrderService) fetchOrderListPage(ctx context.Context, client *shopee.Client, accessToken string, shopID uint64, timeFrom, timeTo int64, pageSize int, cursor string) (*shopee.OrderListResponse, error) {
+	if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
+		return nil, fmt.Errorf("限流等待被取消: %w", err)
+	}
+	var listResp *shopee.OrderListResponse
+	apiErr := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
+		var err error
+		listResp, err = client.GetOrderList(accessToken, shopID, "create_time", timeFrom, timeTo, pageSize, cursor, "")
+		return err
+	})
+	if apiErr != nil {
+		return nil, fmt.Errorf("获取订单列表失败: %w", apiErr)
+	}
+	return listResp, nil
+}
+
+// toPatrolOrderItems 将 API 响应转为 patrolOrderItem 切片
+func (s *OrderService) toPatrolOrderItems(resp *shopee.OrderListResponse) []patrolOrderItem {
+	items := make([]patrolOrderItem, 0, len(resp.Response.OrderList))
+	for _, o := range resp.Response.OrderList {
+		items = append(items, patrolOrderItem{OrderSN: o.OrderSN, Status: o.OrderStatus})
+	}
+	return items
+}
+
+// queryDBOrderStatusMap 批量查询 DB 中已有订单的状态，返回 order_sn → order_status
+func (s *OrderService) queryDBOrderStatusMap(shopID uint64, items []patrolOrderItem) map[string]string {
+	orderSNs := make([]string, len(items))
+	for i, o := range items {
+		orderSNs[i] = o.OrderSN
+	}
+	orderTable := database.GetOrderTableName(shopID)
+	var dbOrders []models.Order
+	s.db.Table(orderTable).
+		Select("order_sn", "order_status").
+		Where("shop_id = ? AND order_sn IN ?", shopID, orderSNs).
+		Find(&dbOrders)
+	dbMap := make(map[string]string, len(dbOrders))
+	for _, o := range dbOrders {
+		dbMap[o.OrderSN] = o.OrderStatus
+	}
+	return dbMap
+}
+
+// findOrdersNeedPatch 比对 Shopee 与 DB，筛出需补录的订单号（遗漏或状态不一致）
+func (s *OrderService) findOrdersNeedPatch(items []patrolOrderItem, dbMap map[string]string) []string {
+	var needPatch []string
+	for _, so := range items {
+		dbStatus, exists := dbMap[so.OrderSN]
+		if !exists || dbStatus != so.Status {
+			needPatch = append(needPatch, so.OrderSN)
+		}
+	}
+	return needPatch
+}
+
+// patchOrdersInBatches 分批拉取订单详情并 Upsert 到 DB，返回成功补录数量
+func (s *OrderService) patchOrdersInBatches(ctx context.Context, client *shopee.Client, shopID uint64, region, accessToken string, needPatch []string) (patched int, err error) {
+	fmt.Printf("[Patrol] 店铺=%d 发现 %d 条遗漏/不一致订单，补录中...\n", shopID, len(needPatch))
+
+	for i := 0; i < len(needPatch); i += consts.ShopeeOrderDetailMaxSize {
+		end := i + consts.ShopeeOrderDetailMaxSize
+		if end > len(needPatch) {
+			end = len(needPatch)
+		}
+		batch := needPatch[i:end]
+
+		if err := shopee.WaitForRateLimit(ctx, shopID); err != nil {
+			return patched, fmt.Errorf("限流等待被取消: %w", err)
+		}
+
+		var detailResp *shopee.OrderDetailResponse
+		apiErr := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
+			var e error
+			detailResp, e = client.GetOrderDetail(accessToken, shopID, batch)
+			return e
+		})
+		if apiErr != nil {
+			return patched, fmt.Errorf("获取订单详情失败: %w", apiErr)
+		}
+
+		for _, detail := range detailResp.Response.OrderList {
+			if err := s.UpsertOrder(ctx, shopID, region, &detail); err != nil {
+				fmt.Printf("[Patrol] 店铺=%d 订单=%s 补录失败: %v\n", shopID, detail.OrderSN, err)
+				continue
+			}
+			patched++
+		}
+	}
+	return patched, nil
+}

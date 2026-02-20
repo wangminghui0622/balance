@@ -159,8 +159,8 @@
 | shipping_cost | decimal(15,2) | 运费成本 |
 | total_cost | decimal(15,2) | 总成本 |
 | currency | varchar(10) | 货币 |
-| frozen_amount | decimal(15,2) | 冻结金额 |
-| frozen_transaction_id | bigint unsigned | 冻结流水ID |
+| prepayment_amount | decimal(15,2) | 预付款金额 |
+| deduct_tx_id | bigint unsigned | 扣款流水ID |
 | shipping_carrier | varchar(100) | 物流商 |
 | tracking_number | varchar(100) | 物流单号 |
 | shipped_at | datetime | 发货时间 |
@@ -293,7 +293,7 @@
 | id | bigint unsigned | 主键 |
 | admin_id | bigint | 用户ID (唯一) |
 | balance | decimal(15,2) | 可用余额 |
-| frozen_amount | decimal(15,2) | 冻结金额 |
+| pending_amount | decimal(15,2) | 待结算金额 |
 | total_recharge | decimal(15,2) | 累计充值 |
 | total_consume | decimal(15,2) | 累计消费 |
 | currency | varchar(10) | 货币 (默认TWD) |
@@ -321,7 +321,7 @@
 | id | bigint unsigned | 主键 |
 | admin_id | bigint | 用户ID (唯一) |
 | balance | decimal(15,2) | 可用余额 |
-| frozen_amount | decimal(15,2) | 冻结金额 |
+| pending_amount | decimal(15,2) | 待结算金额 |
 | total_earnings | decimal(15,2) | 累计收益 |
 | total_withdrawn | decimal(15,2) | 累计提现 |
 | currency | varchar(10) | 货币 |
@@ -336,7 +336,7 @@
 | id | bigint unsigned | 主键 |
 | admin_id | bigint | 用户ID (唯一) |
 | balance | decimal(15,2) | 可用余额 |
-| frozen_amount | decimal(15,2) | 冻结金额 |
+| pending_amount | decimal(15,2) | 待结算金额 |
 | total_earnings | decimal(15,2) | 累计收益 |
 | total_withdrawn | decimal(15,2) | 累计提现 |
 | currency | varchar(10) | 货币 |
@@ -350,7 +350,7 @@
 |------|------|------|
 | id | bigint unsigned | 主键 |
 | balance | decimal(15,2) | 可用余额 |
-| frozen_amount | decimal(15,2) | 冻结金额 |
+| pending_amount | decimal(15,2) | 待结算金额 |
 | total_earnings | decimal(15,2) | 累计收益 |
 | total_withdrawn | decimal(15,2) | 累计提现 |
 | currency | varchar(10) | 货币 |

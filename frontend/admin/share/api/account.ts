@@ -9,7 +9,7 @@ export interface PrepaymentAccount {
   id: number
   admin_id: number
   balance: string
-  frozen_amount: string
+  pending_amount: string
   total_recharge: string
   total_consume: string
   currency: string
@@ -35,7 +35,7 @@ export interface OperatorAccount {
   id: number
   admin_id: number
   balance: string
-  frozen_amount: string
+  pending_amount: string
   total_earnings: string
   total_withdrawn: string
   currency: string
@@ -242,20 +242,19 @@ export const operatorAccountApi = {
 // 账户状态常量
 export const AccountStatus = {
   NORMAL: 1,   // 正常
-  FROZEN: 2    // 冻结
+  SUSPENDED: 2 // 暂停
 }
 
 export const AccountStatusText: Record<number, string> = {
   1: '正常',
-  2: '冻结'
+  2: '暂停'
 }
 
 // 交易类型常量
 export const TransactionType = {
   RECHARGE: 'recharge',           // 充值
   WITHDRAW: 'withdraw',           // 提现
-  FREEZE: 'freeze',               // 冻结
-  UNFREEZE: 'unfreeze',           // 解冻
+  FREEZE: 'freeze',               // 扣除预付款（订单入系统）
   ORDER_PAY: 'order_pay',         // 订单支付
   ORDER_REFUND: 'order_refund',   // 订单退款
   PROFIT_SHARE: 'profit_share',   // 利润分成
@@ -268,10 +267,9 @@ export const TransactionType = {
 export const TransactionTypeText: Record<string, string> = {
   'recharge': '充值',
   'withdraw': '提现',
-  'freeze': '冻结',
-  'unfreeze': '解冻',
+  'freeze': '扣除',
   'order_pay': '订单支付',
-  'order_refund': '订单退款',
+  'order_refund': '返还',
   'profit_share': '利润分成',
   'cost_settle': '成本结算',
   'platform_fee': '平台服务费',

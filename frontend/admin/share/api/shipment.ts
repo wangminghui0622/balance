@@ -29,7 +29,7 @@ export interface ShipmentRecord {
   shipping_cost: string
   total_cost: string
   currency: string
-  frozen_amount: string
+  prepayment_amount: string
   shipping_carrier: string
   tracking_number: string
   shipped_at: string | null

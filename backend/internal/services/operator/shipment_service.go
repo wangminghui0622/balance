@@ -92,17 +92,17 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, operatorID int64, req *
 		}
 	}
 
-	// 6. 冻结金额与成本：以 orders_x 为准（订单入系统时已冻结，此处仅记录）
-	frozenAmount := order.PrepaymentAmount
-	if !frozenAmount.IsPositive() {
-		frozenAmount = order.TotalAmount
+	// 6. 预付款与成本：以 orders_x 为准（订单入系统时已扣除，此处仅记录）
+	prepaymentAmount := order.PrepaymentAmount
+	if !prepaymentAmount.IsPositive() {
+		prepaymentAmount = order.TotalAmount
 	}
 	totalCost := req.GoodsCost.Add(req.ShippingCost)
 	if !totalCost.IsPositive() {
-		totalCost = frozenAmount
+		totalCost = prepaymentAmount
 	}
 
-	// 7. 创建发货记录（不再次冻结预付款，不操作托管账户）
+	// 7. 创建发货记录（预付款已扣除，不操作账户）
 	recordID, _ := s.idGenerator.GenerateShipmentRecordID(ctx)
 	record := &models.OrderShipmentRecord{
 		ID:                  uint64(recordID),
@@ -115,15 +115,15 @@ func (s *ShipmentService) ShipOrder(ctx context.Context, operatorID int64, req *
 		ShippingCost:        req.ShippingCost,
 		TotalCost:           totalCost,
 		Currency:            order.Currency,
-		FrozenAmount:        frozenAmount,
-		FrozenTransactionID: 0,
+		PrepaymentAmount: prepaymentAmount,
+		DeductTxID:       0,
 		Status:              models.ShipmentRecordStatusPending,
 	}
 	if err := s.db.Table(shipmentRecordTable).Create(record).Error; err != nil {
 		return nil, fmt.Errorf("创建发货记录失败: %w", err)
 	}
 
-	// 8. 调用 Shopee 发货 API
+	// 8. 调用 Shopee 发货 API（带 30s 超时）
 	err = s.callShopeeShipOrder(ctx, req.ShopID, req.OrderSN, req.PickupInfo)
 	if err != nil {
 		record.Status = models.ShipmentRecordStatusFailed
@@ -179,15 +179,33 @@ func (s *ShipmentService) callShopeeShipOrder(ctx context.Context, shopID uint64
 		return fmt.Errorf("获取访问令牌失败: %w", err)
 	}
 
-	// 调用 Shopee API
 	client := shopee.NewClient(shop.Region)
 
+	// 构建 ShipOrderParams（pickup/dropoff/non_integrated 三选一）
+	var params *shopee.ShipOrderParams
 	trackingNo := ""
-	if pickupInfo != nil && pickupInfo.TrackingNo != "" {
+	if pickupInfo != nil {
 		trackingNo = pickupInfo.TrackingNo
+		if pickupInfo.AddressID > 0 && pickupInfo.PickupTimeID != "" {
+			params = &shopee.ShipOrderParams{
+				Pickup: &struct {
+					AddressID    int64  `json:"address_id"`
+					PickupTimeID string `json:"pickup_time_id"`
+				}{
+					AddressID:    int64(pickupInfo.AddressID),
+					PickupTimeID: pickupInfo.PickupTimeID,
+				},
+			}
+		} else if trackingNo != "" {
+			params = &shopee.ShipOrderParams{
+				NonIntegrated: &struct {
+					TrackingNo string `json:"tracking_no"`
+				}{TrackingNo: trackingNo},
+			}
+		}
 	}
 
-	_, err = client.ShipOrder(accessToken, shopID, orderSN, trackingNo)
+	_, err = client.ShipOrderWithParamsContext(ctx, accessToken, shopID, orderSN, params, trackingNo)
 	return err
 }
 

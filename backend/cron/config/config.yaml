@@ -1,0 +1,122 @@
+# 应用配置
+app:
+  name: balance-admin
+  mode: debug  # debug, release, test
+  port: 19090
+
+# MySQL配置
+mysql:
+  host: 42.192.129.44
+  port: 3306
+  username: root
+  password: test789
+  database: balance
+  charset: utf8mb4
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 3600  # 秒
+
+# Redis配置
+redis:
+  host: 42.192.129.44
+  port: 6379
+  password: "test@789"
+  db: 0
+  pool_size: 100
+
+# 虾皮API配置
+shopee:
+  partner_id: 1203446  # 你的Partner ID
+  partner_key: "shpk724b6a656d626b696b756345464e6b614d524664716c61525a4e4e4f466c"  # 你的Partner Key
+  is_production: false  # true-正式线上环境 false-沙箱测试环境
+  # 正式环境API Host
+  hosts:
+    SG: https://partner.shopeemobile.com
+    MY: https://partner.shopeemobile.com
+    TH: https://partner.shopeemobile.com
+    TW: https://partner.shopeemobile.com
+    VN: https://partner.shopeemobile.com
+    PH: https://partner.shopeemobile.com
+    BR: https://openplatform.shopee.com.br
+    MX: https://openplatform.shopee.com.mx
+    CO: https://openplatform.shopee.com.co
+    CL: https://openplatform.shopee.cl
+  # 沙箱环境API Host
+  sandbox_hosts:
+    SG: https://openplatform.sandbox.test-stable.shopee.cn
+    MY: https://openplatform.sandbox.test-stable.shopee.cn
+    TH: https://openplatform.sandbox.test-stable.shopee.cn
+    TW: https://openplatform.sandbox.test-stable.shopee.cn
+    VN: https://openplatform.sandbox.test-stable.shopee.cn
+    PH: https://openplatform.sandbox.test-stable.shopee.cn
+    BR: https://openplatform.sandbox.test-stable.shopee.cn
+    MX: https://openplatform.sandbox.test-stable.shopee.cn
+    CO: https://openplatform.sandbox.test-stable.shopee.cn
+    CL: https://openplatform.sandbox.test-stable.shopee.cn
+  # 授权回调地址
+  redirect_url: https://kx9y.com/api/v1/balance/admin/auth/callback
+
+# JWT配置
+jwt:
+  secret: "sheepx-jwt-secret-key-2026"
+  expire_hours: 168  # 7天
+
+# 邮件配置
+email:
+  host: smtp.qq.com
+  port: 587
+  username: your_email@qq.com
+  password: your_smtp_password
+  from: your_email@qq.com
+  from_name: 天平系统
+
+# 第三方支付配置（预留，待对接时填入真实密钥并启用）
+payment:
+  paypal:
+    enabled: false
+    sandbox: true
+    client_id: ""
+    client_secret: ""
+    webhook_id: ""
+    return_url: ""
+    cancel_url: ""
+  alipay:
+    enabled: false
+    sandbox: true
+    app_id: ""
+    private_key: ""
+    public_key: ""
+    notify_url: ""
+    return_url: ""
+  linepay:
+    enabled: false
+    sandbox: true
+    channel_id: ""
+    channel_secret: ""
+    return_url: ""
+    cancel_url: ""
+  visa:
+    enabled: false
+    sandbox: true
+    provider: "stripe"  # stripe / tappay / ecpay
+    api_key: ""
+    secret_key: ""
+    webhook_secret: ""
+  wechat:
+    enabled: false
+    sandbox: true
+    app_id: ""
+    mch_id: ""
+    api_key_v3: ""
+    serial_no: ""
+    private_key: ""
+    notify_url: ""
+
+# 日志配置
+log:
+  level: debug  # debug, info, warn, error
+  file: logs/app.log
+  max_size: 100  # MB
+  max_backups: 30
+  max_age: 7  # 天
+  compress: true

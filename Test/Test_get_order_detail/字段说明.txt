@@ -1,0 +1,162 @@
+================================================================================
+Shopee get_order_detail API 响应字段说明
+参考文档: https://open.shopee.com/documents/v2/v2.order.get_order_detail
+================================================================================
+
+一、顶层字段
+--------------------------------------------------------------------------------
+error               string   错误码，空字符串表示成功
+message             string   错误信息，成功时为空
+request_id          string   请求追踪 ID，用于排查问题
+response            object   业务数据
+
+
+二、response 下的 order_list
+--------------------------------------------------------------------------------
+order_list 为数组，每个元素代表一个订单的完整详情。
+
+
+三、订单 (order) 字段说明
+--------------------------------------------------------------------------------
+字段名                      类型      说明
+--------------------------------------------------------------------------------
+advance_package             bool      是否预包（提前打包）
+booking_sn                  string    预约单号（如配送预约）
+cod                         bool      是否货到付款 (Cash on Delivery)
+create_time                 int64     订单创建时间（Unix 秒）
+currency                    string    币种，如 SGD、TWD、USD
+days_to_ship                int       承诺发货天数
+is_buyer_shop_collection    bool      是否买家到店自提
+message_to_seller           string    买家给卖家的留言
+order_sn                    string    订单号（唯一标识）
+order_status                string    订单状态，见下表
+payment_method              string    支付方式，如 Apple Pay、Credit Card
+recipient_address           object    收货地址
+region                      string    站点区域码，如 SG、TW、MY
+reverse_shipping_fee        float     退货物流费
+ship_by_date                int64     最晚发货时间（Unix 秒）
+shipping_carrier            string    物流承运商
+total_amount                float     订单总金额
+update_time                 int64     订单更新时间（Unix 秒）
+item_list                   array     订单商品列表
+package_list                array     包裹列表（可含多个包裹）
+
+
+四、订单状态 (order_status) 取值
+--------------------------------------------------------------------------------
+UNPAID              待付款
+READY_TO_SHIP       待发货（已付款）
+PROCESSED           处理中
+SHIPPED             已发货
+TO_CONFIRM_RECEIVE  待确认收货
+IN_CANCEL           取消中
+CANCELLED           已取消
+TO_RETURN           待退货
+RETURNED            已退货
+
+
+五、收货地址 (recipient_address) 字段
+--------------------------------------------------------------------------------
+字段名        类型    说明
+--------------------------------------------------------------------------------
+city          string  城市
+district      string  区/县
+full_address  string  完整地址（脱敏显示为 ****）
+name          string  收货人姓名（脱敏）
+phone         string  联系电话（脱敏）
+region        string  区域码，如 SG
+state         string  州/省
+town          string  乡镇
+zipcode       string  邮编
+
+
+六、商品 (item_list 中每项) 字段说明
+--------------------------------------------------------------------------------
+字段名                    类型      说明
+--------------------------------------------------------------------------------
+add_on_deal               bool      是否加购商品
+add_on_deal_id            int64     加购活动 ID
+consultation_id           string    咨询 ID
+image_info                object    图片信息
+  - image_url             string    商品主图 URL
+is_b2c_owned_item         bool      是否 B2C 自营商品
+is_prescription_item      bool      是否处方药
+item_id                   int64     商品 ID（商品主键）
+item_name                 string    商品名称
+item_sku                  string    商品 SKU
+main_item                 bool      是否主商品
+model_discounted_price    float     折后单价
+model_id                  int64     规格/型号 ID（0 表示无规格）
+model_name                string    规格名称，如颜色、尺寸
+model_original_price      float     原价单价
+model_quantity_purchased  int       购买数量
+model_sku                 string    规格 SKU
+order_item_id             int64     订单项 ID
+product_location_id       array     商品产地/仓ID，如 ["SGZ"]
+promotion_group_id        int64     促销组 ID
+promotion_id              int64     促销活动 ID
+promotion_type            string    促销类型
+weight                    float     重量
+wholesale                 bool      是否批发
+
+
+七、包裹 (package_list 中每项) 字段说明
+--------------------------------------------------------------------------------
+字段名                    类型      说明
+--------------------------------------------------------------------------------
+allow_self_design_awb     bool      是否允许自定义面单
+group_shipment_id         string    合单物流 ID
+item_list                 array     本包裹内的商品
+  - item_id               int64     商品 ID
+  - model_id              int64     规格 ID
+  - model_quantity        int       本包裹中该商品数量
+  - order_item_id         int64     订单项 ID
+  - product_location_id   string    产地/仓 ID
+  - promotion_group_id    int64     促销组 ID
+logistics_channel_id      int64     物流渠道 ID
+logistics_status          string    物流状态，见下表
+package_number            string    包裹单号/运单号
+parcel_chargeable_weight_gram  int  计费重量（克）
+shipping_carrier          string    物流承运商
+sorting_group             string    分拣组
+
+
+八、物流状态 (logistics_status) 取值
+--------------------------------------------------------------------------------
+LOGISTICS_PENDING_ARRANGE    待安排
+LOGISTICS_PICKUP_DONE        已揽收
+LOGISTICS_PICKUP_RETRY       揽收重试
+LOGISTICS_PICKUP_FAILED      揽收失败
+LOGISTICS_DELIVERY           派送中
+LOGISTICS_DELIVERED          已送达
+LOGISTICS_INVALID            无效（如已取消订单的包裹）
+LOGISTICS_EXPIRED            已过期
+
+
+九、示例数据简要解读
+--------------------------------------------------------------------------------
+order_sn: 2602183HM8UDVC
+  - 订单已取消 (CANCELLED)
+  - 总金额 210.99 SGD
+  - 2 个商品：商品 801992800 ×2（无规格）、商品 844117783 规格 red ×2
+  - 1 个包裹，运单号 OFG225122014205795，物流状态 LOGISTICS_INVALID
+  - 支付方式 Apple Pay
+  - 站点 SG（新加坡）
+
+item 与 package 的对应：
+  - package_list 中 item_list 列出该包裹包含哪些商品及数量
+  - 用于 cancel_order 时需传 item_id + model_id 构建 item_list
+
+
+十、cancel_order 所需 item_list 的构建
+--------------------------------------------------------------------------------
+从 get_order_detail 的 order_list[].item_list 中提取：
+  - item_id
+  - model_id（为 0 时表示无规格，传 0 即可）
+
+传给 cancel_order 的 item_list 示例：
+  [{"item_id": 801992800, "model_id": 0}, {"item_id": 844117783, "model_id": 10006252415}]
+
+================================================================================
+文档结束
+================================================================================

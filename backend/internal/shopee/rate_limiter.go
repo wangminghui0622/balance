@@ -3,6 +3,7 @@ package shopee
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,25 +48,31 @@ func WaitForRateLimit(ctx context.Context, shopID uint64) error {
 }
 
 // RetryWithBackoff 带退避的重试
+// - 限流错误：指数退避（1s, 2s, 4s...）
+// - Shopee 临时错误（error_data、Inner error、try later）：更长退避（5s, 10s, 15s...）
+// - 其他错误：固定间隔重试
 func RetryWithBackoff(ctx context.Context, maxRetries int, fn func() error) error {
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
 		if err := fn(); err != nil {
 			lastErr = err
-			if isRateLimitError(err) {
-				waitTime := time.Duration(consts.ShopeeAPIRetryInterval*(1<<i)) * time.Millisecond
+			var waitTime time.Duration
+			switch {
+			case isRateLimitError(err):
+				waitTime = time.Duration(consts.ShopeeAPIRetryInterval*(1<<i)) * time.Millisecond
+			case isTransientShopeeError(err):
+				// Shopee 沙箱/服务端临时错误，需更长等待
+				waitTime = time.Duration(5+5*i) * time.Second // 5s, 10s, 15s
+			default:
+				waitTime = time.Duration(consts.ShopeeAPIRetryInterval) * time.Millisecond
+			}
+			if i < maxRetries-1 {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				case <-time.After(waitTime):
 					continue
 				}
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(time.Duration(consts.ShopeeAPIRetryInterval) * time.Millisecond):
-				continue
 			}
 		}
 		return nil
@@ -81,6 +88,17 @@ func isRateLimitError(err error) bool {
 	return contains(errStr, "error.too_many_request") ||
 		contains(errStr, "rate limit") ||
 		contains(errStr, "429")
+}
+
+// isTransientShopeeError 是否为 Shopee 临时错误（可等待更长时间后重试）
+func isTransientShopeeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "error_data") ||
+		strings.Contains(s, "try later") ||
+		strings.Contains(s, "Inner error")
 }
 
 func contains(s, substr string) bool {

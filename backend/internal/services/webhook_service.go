@@ -311,16 +311,18 @@ func (s *WebhookService) HandleOrderCancel(ctx context.Context, shopID uint64, d
 			"remark":      fmt.Sprintf("订单已取消: %s - %s", cancelData.CancelBy, cancelData.CancelReason),
 		})
 
-	// 处理预付款返还（prepayment_status=1 时返还）
-	s.handleOrderCancelRefund(ctx, shopID, cancelData.OrderSN, cancelData.CancelBy, cancelData.CancelReason)
+	// 仅发货前取消时返还预付款（prepayment_status=1，将 prepayment_amount 加回店铺老板预付款）
+	if !shipped {
+		s.handleOrderCancelRefund(ctx, shopID, cancelData.OrderSN, cancelData.CancelBy, cancelData.CancelReason)
+	}
 
 	rdb := database.GetRedis()
 	cacheKey := fmt.Sprintf(consts.KeyOrderStatus, shopID, cancelData.OrderSN)
 	rdb.Del(ctx, cacheKey)
 }
 
-// handleOrderCancelRefund 处理订单取消退款 - 使用分表
-// 预付款在 READY_TO_SHIP 时已冻结，取消时需解冻（无论是否已有发货记录）
+// handleOrderCancelRefund 处理发货前取消的预付款返还 - 使用分表
+// 订单入系统时已扣除预付款，发货前取消时返还 prepayment_amount 至店铺老板预付款账户
 func (s *WebhookService) handleOrderCancelRefund(ctx context.Context, shopID uint64, orderSN string, cancelBy string, cancelReason string) {
 	orderTable := database.GetOrderTableName(shopID)
 	var order models.Order
@@ -328,7 +330,7 @@ func (s *WebhookService) handleOrderCancelRefund(ctx context.Context, shopID uin
 		Select("id", "shop_id", "order_sn", "prepayment_status", "prepayment_amount", "total_amount").First(&order).Error; err != nil {
 		return
 	}
-	// 仅当预付款已冻结时解冻（prepayment_status=1）
+	// 仅当预付款已扣除时返还（prepayment_status=1）
 	if order.PrepaymentStatus != models.PrepaymentSufficient {
 		return
 	}
@@ -343,10 +345,10 @@ func (s *WebhookService) handleOrderCancelRefund(ctx context.Context, shopID uin
 	}
 
 	accountService := NewAccountService()
-	_, err := accountService.UnfreezePrepayment(ctx, shop.AdminID, unfreezeAmount, orderSN,
-		fmt.Sprintf("订单取消退款: %s - %s", cancelBy, cancelReason))
+	_, err := accountService.RefundPrepayment(ctx, shop.AdminID, unfreezeAmount, orderSN,
+		fmt.Sprintf("发货前取消返还: %s - %s", cancelBy, cancelReason))
 	if err != nil {
-		s.logError(ctx, shopID, consts.WebhookBuyerCancelOrder, "unfreeze_error", err)
+		s.logError(ctx, shopID, consts.WebhookBuyerCancelOrder, "refund_error", err)
 		return
 	}
 
@@ -366,7 +368,7 @@ func (s *WebhookService) handleOrderCancelRefund(ctx context.Context, shopID uin
 //
 // Shopee 推送退货事件时调用，从 data 中提取 return_sn 和 order_sn，
 // 然后调用 GetReturnDetail 获取完整退货信息并保存到数据库。
-// 如果退货状态已确认退款，会自动解冻预付款。
+// 如果退货状态已确认退款，会自动返还预付款。
 func (s *WebhookService) HandleReturn(ctx context.Context, shopID uint64, data any, timestamp int64, code int) {
 	dataBytes, err := json.Marshal(data)
 	if err != nil {

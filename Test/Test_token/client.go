@@ -1,7 +1,6 @@
-package shopee
+package main
 
 import (
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"balance/backend/internal/config"
 )
 
 // Client 虾皮API客户端
@@ -27,7 +24,7 @@ type Client struct {
 
 // NewClient 创建虾皮API客户端
 func NewClient(region string) *Client {
-	cfg := config.Get().Shopee
+	cfg := Get().Shopee
 	return &Client{
 		partnerID:  cfg.PartnerID,
 		partnerKey: cfg.PartnerKey,
@@ -70,10 +67,7 @@ func (c *Client) buildCommonParams(timestamp int64, sign string, accessToken str
 	return params
 }
 
-func (c *Client) doRequest(ctx context.Context, method, path string, params url.Values, body interface{}, accessToken string, shopID uint64) ([]byte, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (c *Client) doRequest(method, path string, params url.Values, body interface{}, accessToken string, shopID uint64) ([]byte, error) {
 	timestamp := time.Now().Unix()
 	sign := c.generateSign(path, timestamp, accessToken, shopID)
 
@@ -93,7 +87,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, params url.
 		reqBody = strings.NewReader(string(jsonData))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, urlStr, reqBody)
+	req, err := http.NewRequest(method, urlStr, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
@@ -116,22 +110,12 @@ func (c *Client) doRequest(ctx context.Context, method, path string, params url.
 
 // Get 执行GET请求
 func (c *Client) Get(path string, params url.Values, accessToken string, shopID uint64) ([]byte, error) {
-	return c.doRequest(context.Background(), http.MethodGet, path, params, nil, accessToken, shopID)
-}
-
-// GetWithContext 带 context 的 GET 请求
-func (c *Client) GetWithContext(ctx context.Context, path string, params url.Values, accessToken string, shopID uint64) ([]byte, error) {
-	return c.doRequest(ctx, http.MethodGet, path, params, nil, accessToken, shopID)
+	return c.doRequest(http.MethodGet, path, params, nil, accessToken, shopID)
 }
 
 // Post 执行POST请求
 func (c *Client) Post(path string, params url.Values, body interface{}, accessToken string, shopID uint64) ([]byte, error) {
-	return c.doRequest(context.Background(), http.MethodPost, path, params, body, accessToken, shopID)
-}
-
-// PostWithContext 带 context 的 POST 请求
-func (c *Client) PostWithContext(ctx context.Context, path string, params url.Values, body interface{}, accessToken string, shopID uint64) ([]byte, error) {
-	return c.doRequest(ctx, http.MethodPost, path, params, body, accessToken, shopID)
+	return c.doRequest(http.MethodPost, path, params, body, accessToken, shopID)
 }
 
 // BaseResponse 基础响应结构

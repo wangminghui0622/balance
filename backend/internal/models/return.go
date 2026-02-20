@@ -21,11 +21,11 @@ const (
 
 // 退货退款处理状态（系统内部）
 const (
-	ReturnRefundUnprocessed = 0 // 未处理（预付款未解冻）
-	ReturnRefundProcessed   = 1 // 已处理（预付款已解冻）
-	ReturnRefundSkipped     = 2 // 跳过（无需解冻，如订单未冻结预付款）
-	ReturnRefundProcessing  = 3 // 处理中（已标记，正在解冻预付款）
-	ReturnRefundFailed      = 4 // 处理失败（解冻出错，需人工介入）
+	ReturnRefundUnprocessed = 0 // 未处理（预付款未返还）
+	ReturnRefundProcessed   = 1 // 已处理（预付款已返还）
+	ReturnRefundSkipped     = 2 // 跳过（无需返还，如订单未扣除预付款）
+	ReturnRefundProcessing  = 3 // 处理中（已标记，正在返还预付款）
+	ReturnRefundFailed      = 4 // 处理失败（返还出错，需人工介入）
 )
 
 // Return 退货退款记录（从 Shopee 同步的退货退款信息，分表）
@@ -47,7 +47,7 @@ type Return struct {
 	ShopeeCreateTime  *time.Time      `gorm:"comment:Shopee退货创建时间" json:"shopee_create_time"`
 	ShopeeUpdateTime  *time.Time      `gorm:"comment:Shopee退货更新时间" json:"shopee_update_time"`
 	DueDate           *time.Time      `gorm:"comment:卖家处理截止时间" json:"due_date"`
-	RefundStatus      int8            `gorm:"not null;default:0;index;comment:退款处理状态(0未处理/1已解冻预付款/2跳过)" json:"refund_status"`
+	RefundStatus      int8            `gorm:"not null;default:0;index;comment:退款处理状态(0未处理/1已返还预付款/2跳过)" json:"refund_status"`
 	RefundProcessedAt *time.Time      `gorm:"comment:退款处理时间" json:"refund_processed_at"`
 	CreatedAt         time.Time       `gorm:"autoCreateTime;comment:记录创建时间" json:"created_at"`
 	UpdatedAt         time.Time       `gorm:"autoUpdateTime;comment:记录更新时间" json:"updated_at"`

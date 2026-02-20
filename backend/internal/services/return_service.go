@@ -231,24 +231,24 @@ func (s *ReturnService) processRefund(ctx context.Context, shopID uint64, detail
 		First(&shipmentRecord).Error == nil && shipmentRecord.Status == models.ShipmentRecordStatusShipped)
 
 	isFullRefund := refundAmount.GreaterThanOrEqual(order.TotalAmount)
-	var unfreezeAmount decimal.Decimal
+	var refundPrepaymentAmount decimal.Decimal
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if beforeShip && isFullRefund {
-			unfreezeAmount = order.PrepaymentAmount
-			if !unfreezeAmount.IsPositive() {
-				unfreezeAmount = order.TotalAmount
+			refundPrepaymentAmount = order.PrepaymentAmount
+			if !refundPrepaymentAmount.IsPositive() {
+				refundPrepaymentAmount = order.TotalAmount
 			}
 		} else if beforeShip && !isFullRefund {
-			unfreezeAmount = s.computePartialRefundPrepaymentInTx(tx, shopID, orderSN, order, detail)
+			refundPrepaymentAmount = s.computePartialRefundPrepaymentInTx(tx, shopID, orderSN, order, detail)
 		} else {
-			unfreezeAmount = refundAmount
-			if unfreezeAmount.GreaterThan(order.TotalAmount) {
-				unfreezeAmount = order.TotalAmount
+			refundPrepaymentAmount = refundAmount
+			if refundPrepaymentAmount.GreaterThan(order.TotalAmount) {
+				refundPrepaymentAmount = order.TotalAmount
 			}
 		}
 
-		_, innerErr := s.accountService.UnfreezePrepaymentInTx(tx, ctx, shop.AdminID, unfreezeAmount, orderSN,
+		_, innerErr := s.accountService.RefundPrepaymentInTx(tx, ctx, shop.AdminID, refundPrepaymentAmount, orderSN,
 			fmt.Sprintf("退货退款返还-退货单%s 订单%s", returnSN, orderSN))
 		if innerErr != nil {
 			return fmt.Errorf("返还预付款失败: %w", innerErr)
@@ -281,7 +281,7 @@ func (s *ReturnService) processRefund(ctx context.Context, shopID uint64, detail
 		s.markRefundStatus(returnTable, shopID, returnSN, models.ReturnRefundFailed)
 		return
 	}
-	fmt.Printf("[ReturnService] 店铺=%d 退货=%s 订单=%s 退款返还成功 金额=%s\n", shopID, returnSN, orderSN, unfreezeAmount.StringFixed(2))
+	fmt.Printf("[ReturnService] 店铺=%d 退货=%s 订单=%s 退款返还成功 金额=%s\n", shopID, returnSN, orderSN, refundPrepaymentAmount.StringFixed(2))
 }
 
 // computePartialRefundPrepaymentInTx 在事务内计算部分退款应返还的预付款，并更新退款子单的 order_status、prepayment_amount
@@ -299,7 +299,7 @@ func (s *ReturnService) computePartialRefundPrepaymentInTx(tx *gorm.DB, shopID u
 		orderPrepayment = order.TotalAmount
 	}
 
-	var totalUnfreeze decimal.Decimal
+	var totalRefund decimal.Decimal
 	itemMap := make(map[string]int) // "itemID:modelID" -> index in resp.Item
 	for i, it := range resp.Item {
 		itemMap[fmt.Sprintf("%d:%d", it.ItemID, it.ModelID)] = i
@@ -323,19 +323,19 @@ func (s *ReturnService) computePartialRefundPrepaymentInTx(tx *gorm.DB, shopID u
 				itemPrepayment = orderPrepayment.Mul(itemRefund).Div(order.TotalAmount)
 			}
 		}
-		totalUnfreeze = totalUnfreeze.Add(itemPrepayment)
+		totalRefund = totalRefund.Add(itemPrepayment)
 		tx.Table(orderItemTable).Where("id = ?", oi.ID).Updates(map[string]interface{}{
 			"order_status":      consts.OrderStatusCancelledBeforeShip,
 			"prepayment_amount": itemPrepayment,
 		})
 	}
 
-	if totalUnfreeze.IsZero() && len(resp.Item) > 0 {
+	if totalRefund.IsZero() && len(resp.Item) > 0 {
 		if order.TotalAmount.IsPositive() {
-			totalUnfreeze = orderPrepayment.Mul(refundAmount).Div(order.TotalAmount)
+			totalRefund = orderPrepayment.Mul(refundAmount).Div(order.TotalAmount)
 		}
 	}
-	return totalUnfreeze
+	return totalRefund
 }
 
 // markRefundStatus 更新退货记录的退款处理状态
@@ -380,7 +380,7 @@ func (s *ReturnService) SyncReturns(ctx context.Context, shopID uint64, accessTo
 		}
 
 		var listResp *shopee.ReturnListResponse
-		err := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
+		err := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimesSync, func() error {
 			var err error
 			listResp, err = client.GetReturnList(accessToken, shopID, createTimeFrom, createTimeTo, pageSize, cursor)
 			return err
@@ -410,7 +410,7 @@ func (s *ReturnService) SyncReturns(ctx context.Context, shopID uint64, accessTo
 			}
 
 			var detailResp *shopee.ReturnDetailResponse
-			detailErr := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimes, func() error {
+			detailErr := shopee.RetryWithBackoff(ctx, consts.ShopeeAPIRetryTimesSync, func() error {
 				var err error
 				detailResp, err = client.GetReturnDetail(accessToken, shopID, item.ReturnSN)
 				return err

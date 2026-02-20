@@ -267,7 +267,7 @@ GET /shopower/account/prepayment
     "id": 1,
     "admin_id": 1,
     "balance": "10000.00",
-    "frozen_amount": "500.00",
+    "pending_amount": "500.00",
     "total_recharge": "15000.00",
     "total_consume": "5000.00",
     "currency": "TWD",

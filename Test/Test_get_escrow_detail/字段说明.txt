@@ -1,0 +1,179 @@
+================================================================================
+Shopee get_escrow_detail API 响应字段说明
+接口: /api/v2/payment/get_escrow_detail
+用途: 获取订单结算明细（Escrow 托管金额、买家支付、卖家收入等）
+================================================================================
+
+一、顶层字段
+--------------------------------------------------------------------------------
+error               string   错误码，空表示成功
+message             string   错误信息
+request_id          string   请求追踪 ID
+response            object   业务数据
+
+
+二、response 顶层字段
+--------------------------------------------------------------------------------
+order_sn                string   订单号
+buyer_user_name         string   买家用户名
+buyer_payment_info      object   买家支付信息
+order_income            object   卖家订单收入明细
+return_order_sn_list    array    关联的退货单号列表
+
+
+三、buyer_payment_info（买家支付信息）
+--------------------------------------------------------------------------------
+字段名                          类型    说明
+--------------------------------------------------------------------------------
+buyer_payment_method            string  支付方式，如 Apple Pay、Credit Card
+buyer_total_amount              float   买家实付总金额
+merchant_subtotal               float   商品小计（不含运费）
+shipping_fee                    float   运费
+buyer_service_fee               float   买家服务费
+buyer_tax_amount                float   买家税费
+bulky_handling_fee              float   大件 handling 费
+buyer_paid_extended_warranty    float   延保费
+buyer_paid_installation_fee     float   安装费
+credit_card_promotion           float   信用卡促销抵扣（负值表示优惠）
+discount_pix                    float   PIX 折扣（巴西）
+shopee_coins_redeemed           float   虾皮金币抵扣
+shopee_voucher                  float   Shopee 优惠券抵扣
+seller_voucher                  float   卖家优惠券抵扣
+total_tax_and_fees_amount       float   税费及手续费合计
+is_paid_by_credit_card          bool    是否信用卡支付
+vat                             float   增值税
+footwear_tax                    float   鞋类税
+import_duty_and_excise_tax      float   进口关税
+import_tax_amount               float   进口税
+icms_tax_amount                 float   ICMS 税（巴西）
+iof_tax_amount                  float   IOF 税（巴西）
+insurance_premium               float   保险费
+trade_in_bonus                  float   以旧换新奖励
+trade_in_discount               float   以旧换新折扣
+initial_buyer_txn_fee           float   买家交易费
+lvg_sales_tax_adjustment        float   LVG 销售税调整
+import_processing_charge        float   进口处理费
+
+
+四、order_income（卖家订单收入明细）
+--------------------------------------------------------------------------------
+字段名                                      类型    说明
+--------------------------------------------------------------------------------
+escrow_amount                               float   托管金额（关键：Shopee 将结算给卖家的金额）
+escrow_amount_after_adjustment               float   调账后托管金额
+buyer_total_amount                           float   买家实付总金额
+buyer_payment_method                         string  支付方式
+order_original_price                         float   订单原价
+order_selling_price                          float   订单售价
+order_discounted_price                       float   折后价
+order_seller_discount                        float   卖家折扣
+order_shopee_discount                        float   Shopee 折扣
+cost_of_goods_sold                           float   销货成本
+original_cost_of_goods_sold                  float   原始销货成本
+commission_fee                               float   平台佣金
+seller_transaction_fee                       float   卖家交易费
+credit_card_transaction_fee                  float   信用卡手续费
+buyer_paid_shipping_fee                      float   买家实付运费
+estimated_shipping_fee                       float   预估运费
+actual_shipping_fee                          float   实际运费
+final_shipping_fee                           float   最终运费
+campaign_fee                                 float   营销活动费
+seller_return_refund                         float   退货退款扣减（负值，如 -209）
+drc_adjustable_refund                        float   DRC 可调退款
+reverse_shipping_fee                         float   退货运费
+shopee_discount                              float   Shopee 优惠
+seller_discount                              float   卖家优惠
+coins                                        float   金币
+service_fee                                  float   服务费
+cross_border_tax                             float   跨境税
+escrow_tax                                   float   托管税
+escrow_import_tax                            float   托管进口税
+final_escrow_product_gst                     float   最终商品 GST
+final_escrow_shipping_gst                    float   最终运费 GST
+payment_promotion                            float   支付促销
+fbs_fee                                      float   FBS 费
+delivery_seller_protection_fee_premium_amount float  配送卖家保障费
+installation_fee_paid_by_buyer               float   买家支付的安装费
+buyer_paid_extended_warranty                 float   延保费
+instalment_plan                              string  分期计划，如 "N/A"
+seller_coin_cash_back                        float   卖家金币返现
+seller_order_processing_fee                  float   卖家订单处理费
+seller_lost_compensation                     float   卖家损失补偿
+shopee_shipping_rebate                       float   Shopee 运费补贴
+total_adjustment_amount                      float   调账总额
+seller_return_refund                         float   退货退款（负值=从卖家扣除）
+
+
+五、order_income.items（商品级收入明细）
+--------------------------------------------------------------------------------
+字段名                          类型    说明
+--------------------------------------------------------------------------------
+item_id                         int64   商品 ID
+item_name                       string  商品名称
+item_sku                        string  商品 SKU
+model_id                        int64   规格 ID
+model_name                      string  规格名称
+model_sku                       string  规格 SKU
+quantity_purchased              int     购买数量
+original_price                  float   原价
+selling_price                   float   售价
+discounted_price                float   折后价
+seller_discount                 float   卖家折扣
+shopee_discount                 float   Shopee 折扣
+discount_from_coin              float   金币抵扣
+discount_from_voucher_seller    float   卖家券抵扣
+discount_from_voucher_shopee    float   Shopee 券抵扣
+cost_of_goods_sold              float   销货成本（在 order 层）
+commission_fee                  float   佣金
+seller_order_processing_fee     float   订单处理费
+activity_id                     int64   活动 ID
+activity_type                   string  活动类型
+is_main_item                    bool    是否主商品
+is_b2c_shop_item                bool    是否 B2C 商品
+buyer_paid_extended_warranty    float   延保费
+installation_fee_paid_by_buyer  float   安装费
+ams_commission_fee              float   AMS 佣金
+
+
+六、关键业务字段解读
+--------------------------------------------------------------------------------
+1. escrow_amount（托管金额）
+   - Shopee 将结算给卖家的金额
+   - 订单取消/退货后可为 0
+   - 结算成功会产生 finance_incomes 的 ESCROW_VERIFIED_ADD 记录
+
+2. seller_return_refund
+   - 退货退款扣减，负值表示从卖家收入中扣除
+   - 如 -209 表示因退货退款扣减 209
+
+3. buyer_payment_info.buyer_total_amount
+   - 买家实付总金额
+
+4. order_income 各项扣减
+   - commission_fee、seller_transaction_fee 等会从收入中扣除
+   - 最终 escrow_amount = 收入 - 各类扣减
+
+5. return_order_sn_list
+   - 本订单关联的退货单号，用于关联退货记录
+
+
+七、示例数据简要解读
+--------------------------------------------------------------------------------
+order_sn: 2602183HM8UDVC
+  - 买家实付: 210.99
+  - escrow_amount: 0（订单已取消/退货，无结算给卖家）
+  - seller_return_refund: -209（退货扣减 209）
+  - 2 个商品：567890 x2、123434 red x2
+  - return_order_sn_list: []（无关联退货单或已清空）
+
+
+八、与 finance_incomes 的关系
+--------------------------------------------------------------------------------
+虾皮结算给店铺的判断依据：
+  - get_wallet_transaction_list 中 transaction_type = ESCROW_VERIFIED_ADD
+  - 对应 get_escrow_detail 的 escrow_amount 结算到卖家钱包
+  - finance_incomes 表会记录 transaction_id、order_sn、ESCROW_VERIFIED_ADD、amount
+
+================================================================================
+文档结束
+================================================================================

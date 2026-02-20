@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -280,69 +281,93 @@ func (s *DistributedSyncScheduler) processShop(shopID uint64) {
 // 订单同步任务超时时间（应小于锁TTL，确保任务在锁过期前完成）
 const orderSyncTaskTimeout = 8 * time.Minute
 
-// syncShopOrders 巡检单个店铺的订单
-// 从 Shopee 拉取订单列表，与本地数据库比对，发现遗漏或状态不一致时才写入
+// returnPatrolTimeout 退货巡检超时
+const returnPatrolTimeout = 3 * time.Minute
+
+// defaultPatrolLookback 无上次同步时回溯天数
+const defaultPatrolLookback = 30
+
+// syncShopOrders 巡检单个店铺：订单补录 + 退货退款
+// 从 Shopee 拉取订单列表与本地 DB 比对，发现遗漏或状态不一致时补录；然后同步退货退款
 func (s *DistributedSyncScheduler) syncShopOrders(shopID uint64) {
-	// 记录开始时间，用于计算整体耗时
 	startTime := time.Now()
 	s.logger.Infof("[Patrol] 开始巡检店铺 %d", shopID)
 
-	// 创建带超时的 context，防止单个店铺巡检卡住（上限 8 分钟）
+	shop, ok := s.getShopForPatrol(shopID)
+	if !ok {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), orderSyncTaskTimeout)
 	defer cancel()
 
-	// 从数据库获取店铺信息（包含 region、last_sync_at 等）
+	begin, end := s.determinePatrolTimeRange(shop)
+	//timeFrom(LastSyncAt或者当前时刻的前30天)   timeTo(当前时刻)
+	found, patched, err := s.orderService.PatrolOrders(ctx, shop, begin, end)
+	elapsed := time.Since(startTime)
+
+	if !s.logOrderPatrolResult(shopID, found, patched, elapsed, err) {
+		return
+	}
+
+	s.runReturnPatrol(shopID, shop)
+}
+
+// getShopForPatrol 获取店铺信息，失败时打日志并返回 false
+func (s *DistributedSyncScheduler) getShopForPatrol(shopID uint64) (*models.Shop, bool) {
 	shop, err := s.shopService.GetShopByID(shopID)
 	if err != nil {
 		s.logger.Errorf("[Patrol] 获取店铺 %d 信息失败: %v", shopID, err)
-		return
+		return nil, false
 	}
+	return shop, true
+}
 
-	// 确定巡检的起始时间：优先使用上次同步时间，否则回溯 30 天
-	var timeFrom time.Time
+// determinePatrolTimeRange 确定巡检时间范围：优先上次同步时间，否则回溯默认天数
+func (s *DistributedSyncScheduler) determinePatrolTimeRange(shop *models.Shop) (timeFrom, timeTo time.Time) {
 	if shop.LastSyncAt != nil && !shop.LastSyncAt.IsZero() {
 		timeFrom = *shop.LastSyncAt
 	} else {
-		timeFrom = time.Now().Add(-30 * 24 * time.Hour)
+		timeFrom = time.Now().Add(-defaultPatrolLookback * 24 * time.Hour)
 	}
-	// 巡检截止时间为当前时刻
-	timeTo := time.Now()
+	timeTo = time.Now()
+	return timeFrom, timeTo
+}
 
-	// 执行巡检：拉取 Shopee 订单列表 → 与本地 DB 比对 → 补录遗漏/不一致的订单
-	// found = Shopee 返回的订单总数，patched = 实际补录的订单数
-	found, patched, err := s.orderService.PatrolOrders(ctx, shop, timeFrom, timeTo)
-	// 计算本次巡检总耗时
-	elapsed := time.Since(startTime)
-
-	// 错误处理：区分超时和其他错误
+// logOrderPatrolResult 记录订单巡检结果，err 时返回 false（调用方应中止后续步骤）
+func (s *DistributedSyncScheduler) logOrderPatrolResult(shopID uint64, found, patched int, elapsed time.Duration, err error) bool {
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			s.logger.Errorf("[Patrol] 店铺 %d 巡检超时（耗时 %v）", shopID, elapsed)
+		if errors.Is(err, context.DeadlineExceeded) {
+			s.logger.Errorf("[Patrol] 店铺 %d 订单巡检超时（耗时 %v）", shopID, elapsed)
 		} else {
-			s.logger.Errorf("[Patrol] 店铺 %d 巡检失败（耗时 %v）: %v", shopID, elapsed, err)
+			s.logger.Errorf("[Patrol] 店铺 %d 订单巡检失败（耗时 %v）: %v", shopID, elapsed, err)
 		}
+		return false
+	}
+	if patched > 0 {
+		s.logger.Infof("[Patrol] 店铺 %d 订单巡检完成，Shopee共 %d 条，补录 %d 条（耗时 %v）", shopID, found, patched, elapsed)
+	} else {
+		s.logger.Infof("[Patrol] 店铺 %d 订单巡检完成，Shopee共 %d 条，无遗漏（耗时 %v）", shopID, found, elapsed)
+	}
+	return true
+}
+
+// runReturnPatrol 执行退货退款巡检
+func (s *DistributedSyncScheduler) runReturnPatrol(shopID uint64, shop *models.Shop) {
+	ctx, cancel := context.WithTimeout(context.Background(), returnPatrolTimeout)
+	defer cancel()
+
+	accessToken, err := s.shopService.GetAccessToken(ctx, shopID)
+	if err != nil {
+		s.logger.Warnf("[Patrol] 店铺 %d 无有效授权，跳过退货巡检: %v", shopID, err)
 		return
 	}
 
-	// 输出巡检结果日志
-	if patched > 0 {
-		s.logger.Infof("[Patrol] 店铺 %d 巡检完成，Shopee共 %d 条，补录 %d 条（耗时 %v）", shopID, found, patched, elapsed)
-	} else {
-		s.logger.Infof("[Patrol] 店铺 %d 巡检完成，Shopee共 %d 条，无遗漏（耗时 %v）", shopID, found, elapsed)
+	if err := s.returnService.SyncReturns(ctx, shopID, accessToken, shop.Region); err != nil {
+		s.logger.Errorf("[Patrol] 店铺 %d 退货巡检失败: %v", shopID, err)
+		return
 	}
-
-	// ===== 退货退款巡检 =====
-	// 获取店铺授权信息，用于调用退货 API
-	var auth models.ShopAuthorization
-	if authErr := s.db.Where("shop_id = ?", shopID).First(&auth).Error; authErr == nil {
-		returnCtx, returnCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer returnCancel()
-		if returnErr := s.returnService.SyncReturns(returnCtx, shopID, auth.AccessToken, shop.Region); returnErr != nil {
-			s.logger.Errorf("[Patrol] 店铺 %d 退货巡检失败: %v", shopID, returnErr)
-		} else {
-			s.logger.Infof("[Patrol] 店铺 %d 退货巡检完成", shopID)
-		}
-	}
+	s.logger.Infof("[Patrol] 店铺 %d 退货巡检完成", shopID)
 }
 
 // GetQueueLength 获取队列长度 (用于监控)

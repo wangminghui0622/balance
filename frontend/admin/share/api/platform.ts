@@ -256,7 +256,7 @@ export interface PrepaymentAccount {
   username: string
   email: string
   balance: string
-  frozen_amount: string
+  pending_amount: string
   total_recharge: string
   total_consume: string
   currency: string
@@ -286,7 +286,7 @@ export interface OperatorAccount {
   username: string
   email: string
   balance: string
-  frozen_amount: string
+  pending_amount: string
   total_earnings: string
   total_withdrawn: string
   currency: string

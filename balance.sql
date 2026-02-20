@@ -1,13 +1,12 @@
 -- ============================================================================
--- Balance 系统完整数据库建表SQL
+-- Balance 系统完整数据库建表SQL（全新安装版）
 -- ============================================================================
 -- 生成时间: 2026-02-16
 -- 数据库: MySQL 8.0+
 -- 字符集: utf8mb4_unicode_ci
 -- 主键说明: 所有主键使用Redis生成的13位分布式ID，不使用自增（特殊标注的除外）
--- 分表说明:
---   - 订单相关表 按 shop_id % 10 分成10个表
---   - 账户流水表 按 admin_id % 10 分成10个表
+-- 分表说明: 订单相关按 shop_id % 10 | 账户流水按 admin_id % 10
+-- 使用方式: 删除老库后执行 mysql -u user -p database < balance.sql
 -- ============================================================================
 
 SET NAMES utf8mb4;
@@ -253,11 +252,11 @@ CREATE TABLE `prepayment_accounts` (
   `id` bigint unsigned NOT NULL COMMENT '主键ID(Redis分布式ID)',
   `admin_id` bigint NOT NULL COMMENT '店铺老板ID(关联admin表)',
   `balance` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '可用余额',
-  `frozen_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '冻结金额(发货时冻结)',
+  `pending_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '待结算金额(订单入系统时已扣除，等待分账)',
   `total_recharge` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计充值金额',
   `total_consume` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计消费金额',
   `currency` varchar(10) NOT NULL DEFAULT 'TWD' COMMENT '货币代码',
-  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=冻结',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=暂停',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
@@ -274,7 +273,7 @@ CREATE TABLE `deposit_accounts` (
   `balance` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '保证金余额',
   `required_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '应缴保证金金额',
   `currency` varchar(10) NOT NULL DEFAULT 'TWD' COMMENT '货币代码',
-  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=不足 3=冻结',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=不足 3=暂停',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
@@ -289,11 +288,11 @@ CREATE TABLE `operator_accounts` (
   `id` bigint unsigned NOT NULL COMMENT '主键ID(Redis分布式ID)',
   `admin_id` bigint NOT NULL COMMENT '运营老板ID(关联admin表)',
   `balance` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '可用余额',
-  `frozen_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '冻结金额(提现时冻结)',
+  `pending_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '待结算金额(提现申请时暂扣，打款后扣除)',
   `total_earnings` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计收益金额',
   `total_withdrawn` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计提现金额',
   `currency` varchar(10) NOT NULL DEFAULT 'TWD' COMMENT '货币代码',
-  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=冻结',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=暂停',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
@@ -308,11 +307,11 @@ CREATE TABLE `shop_owner_commission_accounts` (
   `id` bigint unsigned NOT NULL COMMENT '主键ID(Redis分布式ID)',
   `admin_id` bigint NOT NULL COMMENT '店铺老板ID(关联admin表)',
   `balance` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '可用余额',
-  `frozen_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '冻结金额(提现时冻结)',
+  `pending_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '待结算金额(提现申请时暂扣，打款后扣除)',
   `total_earnings` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计收益金额',
   `total_withdrawn` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计提现金额',
   `currency` varchar(10) NOT NULL DEFAULT 'TWD' COMMENT '货币代码',
-  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=冻结',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=暂停',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
@@ -326,11 +325,11 @@ DROP TABLE IF EXISTS `platform_commission_accounts`;
 CREATE TABLE `platform_commission_accounts` (
   `id` bigint unsigned NOT NULL COMMENT '主键ID(单例,固定为1)',
   `balance` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '可用余额',
-  `frozen_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '冻结金额',
+  `pending_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '待结算金额(提现申请时暂扣)',
   `total_earnings` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计收益金额',
   `total_withdrawn` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计提现金额',
   `currency` varchar(10) NOT NULL DEFAULT 'TWD' COMMENT '货币代码',
-  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=冻结',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=暂停',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`)
@@ -347,7 +346,7 @@ CREATE TABLE `penalty_bonus_accounts` (
   `total_penalty` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计罚款金额',
   `total_bonus` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT '累计补贴金额',
   `currency` varchar(10) NOT NULL DEFAULT 'TWD' COMMENT '货币代码',
-  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=冻结',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态: 1=正常 2=暂停',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
@@ -357,7 +356,7 @@ CREATE TABLE `penalty_bonus_accounts` (
 
 
 -- ----------------------------
--- 15. 收款账户表（用户绑定的银行卡/电子钱包）
+-- 14. 收款账户表（用户绑定的银行卡/电子钱包）
 -- ----------------------------
 DROP TABLE IF EXISTS `collection_accounts`;
 CREATE TABLE `collection_accounts` (
@@ -378,7 +377,7 @@ CREATE TABLE `collection_accounts` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='收款账户表';
 
 -- ----------------------------
--- 16. 提现申请表
+-- 15. 提现申请表
 -- ----------------------------
 DROP TABLE IF EXISTS `withdraw_applications`;
 CREATE TABLE `withdraw_applications` (
@@ -408,7 +407,7 @@ CREATE TABLE `withdraw_applications` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='提现申请表';
 
 -- ----------------------------
--- 17. 充值记录表（预付款/保证金充值，无需审核直接入账）
+-- 16. 充值记录表（预付款/保证金充值，需审核后入账）
 -- ----------------------------
 DROP TABLE IF EXISTS `recharge_record`;
 CREATE TABLE `recharge_record` (
@@ -436,7 +435,7 @@ CREATE TABLE `recharge_record` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='充值记录表';
 
 -- ----------------------------
--- 18. 站内消息通知表
+-- 17. 站内消息通知表
 -- ----------------------------
 DROP TABLE IF EXISTS `notifications`;
 CREATE TABLE `notifications` (
@@ -459,7 +458,7 @@ CREATE TABLE `notifications` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='站内消息通知表';
 
 -- ----------------------------
--- 19. 订单每日统计表（按店铺汇总）
+-- 18. 订单每日统计表（按店铺汇总）
 -- ----------------------------
 DROP TABLE IF EXISTS `order_daily_stats`;
 CREATE TABLE `order_daily_stats` (
@@ -479,7 +478,7 @@ CREATE TABLE `order_daily_stats` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单每日统计表';
 
 -- ----------------------------
--- 20. 财务每日统计表（按店铺汇总）
+-- 19. 财务每日统计表（按店铺汇总）
 -- ----------------------------
 DROP TABLE IF EXISTS `finance_daily_stats`;
 CREATE TABLE `finance_daily_stats` (
@@ -496,7 +495,7 @@ CREATE TABLE `finance_daily_stats` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='财务每日统计表';
 
 -- ----------------------------
--- 21. 平台每日统计表（全平台汇总）
+-- 20. 平台每日统计表（全平台汇总）
 -- ----------------------------
 DROP TABLE IF EXISTS `platform_daily_stats`;
 CREATE TABLE `platform_daily_stats` (
@@ -571,7 +570,7 @@ BEGIN
           `escrow_fee_y` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''预留费用Y'',
           `escrow_fee_z` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''预留费用Z'',
           `prepayment_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''实际预付款扣除金额(=escrow_amount_snapshot)'',
-          `prepayment_status` tinyint NOT NULL DEFAULT 0 COMMENT ''预付款状态: 0=未检查 1=充足(已冻结) 2=不足'',
+          `prepayment_status` tinyint NOT NULL DEFAULT 0 COMMENT ''预付款状态: 0=未检查 1=充足 2=不足'',
           `prepayment_snapshot` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''检查时预付款总余额快照'',
           `prepayment_checked_at` datetime DEFAULT NULL COMMENT ''预付款检查时间'',
           PRIMARY KEY (`id`),
@@ -855,6 +854,25 @@ BEGIN
           `status` tinyint NOT NULL DEFAULT 0 COMMENT ''状态: 0=待结算 1=已结算 2=已取消'',
           `settled_at` datetime DEFAULT NULL COMMENT ''结算时间'',
           `remark` varchar(500) NOT NULL DEFAULT '''' COMMENT ''备注'',
+          `adjustment_count` tinyint NOT NULL DEFAULT 0 COMMENT ''已发生调账次数(0~3)'',
+          `adj1_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第1次调账金额(正补款/负扣款)'',
+          `adj1_platform_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第1次调账-平台分成'',
+          `adj1_operator_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第1次调账-运营分成'',
+          `adj1_shop_owner_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第1次调账-店主分成'',
+          `adj1_at` datetime DEFAULT NULL COMMENT ''第1次调账时间'',
+          `adj1_remark` varchar(200) NOT NULL DEFAULT '''' COMMENT ''第1次调账备注'',
+          `adj2_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第2次调账金额'',
+          `adj2_platform_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第2次调账-平台分成'',
+          `adj2_operator_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第2次调账-运营分成'',
+          `adj2_shop_owner_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第2次调账-店主分成'',
+          `adj2_at` datetime DEFAULT NULL COMMENT ''第2次调账时间'',
+          `adj2_remark` varchar(200) NOT NULL DEFAULT '''' COMMENT ''第2次调账备注'',
+          `adj3_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第3次调账金额'',
+          `adj3_platform_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第3次调账-平台分成'',
+          `adj3_operator_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第3次调账-运营分成'',
+          `adj3_shop_owner_share` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''第3次调账-店主分成'',
+          `adj3_at` datetime DEFAULT NULL COMMENT ''第3次调账时间'',
+          `adj3_remark` varchar(200) NOT NULL DEFAULT '''' COMMENT ''第3次调账备注'',
           `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT ''创建时间'',
           `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT ''更新时间'',
           PRIMARY KEY (`id`),
@@ -903,8 +921,8 @@ BEGIN
           `shipping_cost` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''运费成本'',
           `total_cost` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''总成本'',
           `currency` varchar(10) NOT NULL DEFAULT ''TWD'' COMMENT ''货币代码'',
-          `frozen_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''冻结金额'',
-          `frozen_transaction_id` bigint unsigned NOT NULL DEFAULT 0 COMMENT ''冻结流水ID'',
+          `prepayment_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''预付款金额(订单入系统时已扣除)'',
+          `deduct_tx_id` bigint unsigned NOT NULL DEFAULT 0 COMMENT ''扣款流水ID'',
           `shipping_carrier` varchar(100) NOT NULL DEFAULT '''' COMMENT ''物流承运商'',
           `tracking_number` varchar(100) NOT NULL DEFAULT '''' COMMENT ''物流单号'',
           `shipped_at` datetime DEFAULT NULL COMMENT ''发货时间'',
@@ -1051,7 +1069,7 @@ BEGIN
           `transaction_no` varchar(64) NOT NULL COMMENT ''流水号(唯一)'',
           `account_type` varchar(20) NOT NULL COMMENT ''账户类型: prepayment/deposit/operator等'',
           `admin_id` bigint NOT NULL COMMENT ''账户所属用户ID'',
-          `transaction_type` varchar(30) NOT NULL COMMENT ''交易类型: recharge/consume/freeze/unfreeze等'',
+          `transaction_type` varchar(30) NOT NULL COMMENT ''交易类型: recharge/consume/freeze/order_refund等'',
           `amount` decimal(15,2) NOT NULL COMMENT ''金额(正=入账,负=出账)'',
           `balance_before` decimal(15,2) NOT NULL COMMENT ''交易前余额'',
           `balance_after` decimal(15,2) NOT NULL COMMENT ''交易后余额'',
@@ -1170,7 +1188,7 @@ DROP PROCEDURE IF EXISTS create_operation_logs_archive_shards;
 -- ----------------------------
 -- 13. 退货退款表分表 (returns_0 ~ returns_9)
 -- 分表键: shop_id % 10
--- 说明: 记录从 Shopee 同步的退货退款信息，退款确认后自动解冻预付款
+-- 说明: 记录从 Shopee 同步的退货退款信息，退款确认后自动返还预付款
 -- ----------------------------
 DROP PROCEDURE IF EXISTS create_returns_shards;
 DELIMITER //
@@ -1201,7 +1219,7 @@ BEGIN
           `shopee_create_time` datetime DEFAULT NULL COMMENT ''Shopee退货创建时间'',
           `shopee_update_time` datetime DEFAULT NULL COMMENT ''Shopee退货更新时间'',
           `due_date` datetime DEFAULT NULL COMMENT ''卖家处理截止时间'',
-          `refund_status` tinyint NOT NULL DEFAULT 0 COMMENT ''退款处理状态(0未处理/1已解冻预付款/2跳过/3处理中/4处理失败)'',
+          `refund_status` tinyint NOT NULL DEFAULT 0 COMMENT ''退款处理状态(0未处理/1已返还预付款/2跳过/3处理中/4处理失败)'',
           `refund_processed_at` datetime DEFAULT NULL COMMENT ''退款处理时间'',
           `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT ''记录创建时间'',
           `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT ''记录更新时间'',
@@ -1227,64 +1245,17 @@ DROP PROCEDURE IF EXISTS create_returns_shards;
 -- ============================================================================
 
 -- 平台佣金账户（单例记录，固定ID=1）
-INSERT INTO `platform_commission_accounts` (`id`, `balance`, `frozen_amount`, `total_earnings`, `total_withdrawn`, `currency`, `status`) 
+INSERT INTO `platform_commission_accounts` (`id`, `balance`, `pending_amount`, `total_earnings`, `total_withdrawn`, `currency`, `status`) 
 VALUES (1, 0.00, 0.00, 0.00, 0.00, 'TWD', 1);
 
 SET FOREIGN_KEY_CHECKS = 1;
 
 
 -- ============================================================================
--- 增量迁移：为已存在的 order_items_X 添加 order_status、prepayment_amount
--- 仅在已有库升级时执行（新建库无需执行）
--- ============================================================================
-/*
-DROP PROCEDURE IF EXISTS alter_order_items_add_columns;
-DELIMITER //
-CREATE PROCEDURE alter_order_items_add_columns()
-BEGIN
-    DECLARE i INT DEFAULT 0;
-    WHILE i < 10 DO
-        SET @tbl = CONCAT('order_items_', i);
-        SET @sql = CONCAT('ALTER TABLE `', @tbl, '` ADD COLUMN `order_status` varchar(50) NOT NULL DEFAULT '''' COMMENT ''子单状态'' AFTER `item_price`, ADD COLUMN `prepayment_amount` decimal(15,2) NOT NULL DEFAULT 0.00 COMMENT ''子单预付款金额'' AFTER `order_status`');
-        PREPARE stmt FROM @sql;
-        EXECUTE stmt;
-        DEALLOCATE PREPARE stmt;
-        SET i = i + 1;
-    END WHILE;
-END //
-DELIMITER ;
-CALL alter_order_items_add_columns();
-DROP PROCEDURE IF EXISTS alter_order_items_add_columns;
-*/
-
--- ============================================================================
--- 增量迁移：shop_sync_records 拆分为 3 张独立表
--- 仅在已有库升级时执行（新建库无需执行）
--- ============================================================================
-/*
--- 1. 创建新表（若 balance.sql 主建表已执行则跳过）
--- 2. 迁移数据
-INSERT INTO shop_sync_finance_income_records (id, shop_id, last_sync_time, last_transaction_id, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at)
-SELECT id, shop_id, last_sync_time, last_transaction_id, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at
-FROM shop_sync_records WHERE sync_type = 'finance_income';
-
-INSERT INTO shop_sync_order_records (id, shop_id, last_sync_time, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at)
-SELECT id, shop_id, last_sync_time, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at
-FROM shop_sync_records WHERE sync_type = 'order';
-
-INSERT INTO shop_sync_escrow_records (id, shop_id, last_sync_time, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at)
-SELECT id, shop_id, last_sync_time, last_sync_at, total_synced_count, last_sync_count, last_error, consecutive_fail_count, status, created_at, updated_at
-FROM shop_sync_records WHERE sync_type = 'escrow';
-
--- 3. 删除旧表
-DROP TABLE IF EXISTS shop_sync_records;
-*/
-
--- ============================================================================
 -- 附录：表清单与分表规则说明
 -- ============================================================================
 --
--- 一、基础表（不分表）共 21 张:
+-- 一、基础表（不分表）共 20 张:
 --   序号  表名                             说明
 --   1     admin                            管理员/用户表
 --   2     shops                            店铺表
@@ -1301,14 +1272,13 @@ DROP TABLE IF EXISTS shop_sync_records;
 --   11    shop_owner_commission_accounts   店主佣金账户表
 --   12    platform_commission_accounts     平台佣金账户表(单例)
 --   13    penalty_bonus_accounts           罚补账户表
---   14    escrow_accounts                  托管账户表（已经删除）
---   15    collection_accounts              收款账户表
---   16    withdraw_applications            提现申请表
---   17    recharge_record                  充值记录表
---   18    notifications                    站内消息通知表
---   19    order_daily_stats                订单每日统计表
---   20    finance_daily_stats              财务每日统计表
---   21    platform_daily_stats             平台每日统计表
+--   14    collection_accounts              收款账户表
+--   15    withdraw_applications            提现申请表
+--   16    recharge_record                  充值记录表
+--   17    notifications                    站内消息通知表
+--   18    order_daily_stats                订单每日统计表
+--   19    finance_daily_stats              财务每日统计表
+--   20    platform_daily_stats             平台每日统计表
 --
 -- 二、分表（共 13 种基础表 × 10 个分片 = 130 张）:
 --
@@ -1329,7 +1299,7 @@ DROP TABLE IF EXISTS shop_sync_records;
 --   按 admin_id % 10 分表（1种 × 10 = 10张）:
 --   13    account_transactions_0 ~ account_transactions_9  账户流水表
 --
--- 三、总计物理表数量: 21 + 130 = 151 张
+-- 三、总计物理表数量: 20 + 130 = 150 张
 --
 -- 四、分表路由示例:
 --   shop_id  = 12345 → 12345 % 10 = 5 → orders_5, order_items_5, ...

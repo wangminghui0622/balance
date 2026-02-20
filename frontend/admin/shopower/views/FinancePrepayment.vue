@@ -303,10 +303,9 @@ import {
 const txTypeToLabel: Record<string, string> = {
 	recharge: '充值',
 	withdraw: '提现',
-	freeze: '订单付款',
-	unfreeze: '解冻',
+	freeze: '扣除',
 	order_pay: '订单付款',
-	order_refund: '订单退款',
+	order_refund: '返还',
 	adjustment: '账款调整',
 	profit_share: '转存',
 	cost_settle: '转存',

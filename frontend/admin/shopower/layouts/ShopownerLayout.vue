@@ -2,7 +2,7 @@
   <BaseLayout
     :menu-items="menuItems"
     :user-name="userName"
-    :user-account="userAccount"
+    :user-id="userId"
     :message-count="messageCount"
   >
     <router-view />
@@ -10,9 +10,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import BaseLayout from '@share/components/BaseLayout.vue'
 import type { MenuItem } from '@share/types'
+import { authApi } from '@share/api/auth'
 import { 
   House, 
   Shop, 
@@ -20,9 +21,22 @@ import {
   Money 
 } from '@element-plus/icons-vue'
 
-const userName = ref('ShopOwner')
-const userAccount = ref('SO001')
+const userName = ref('')
+const userId = ref('')
 const messageCount = ref(0)
+
+onMounted(async () => {
+  try {
+    const res = await authApi.getCurrentUser()
+    if (res?.data && (res?.code === 0 || res?.code === 200)) {
+      userName.value = res.data.userName || '店主'
+      userId.value = res.data.id != null ? String(res.data.id) : ''
+    }
+  } catch {
+    userName.value = '店主'
+    userId.value = ''
+  }
+})
 
 const menuItems: MenuItem[] = [
   {

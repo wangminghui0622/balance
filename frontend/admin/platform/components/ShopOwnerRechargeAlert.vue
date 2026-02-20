@@ -13,7 +13,7 @@
           <div class="owner-name">{{ item.ownerName }}</div>
           <div class="financial-info">
             <span>可用: {{ item.available }}</span>
-            <span>冻结: {{ item.frozen }}</span>
+            <span>待结算: {{ item.pending }}</span>
             <span>欠费: {{ item.owed }}</span>
           </div>
         </div>
@@ -32,7 +32,7 @@ interface RechargeAlert {
   avatar: string
   ownerName: string
   available: string
-  frozen: string
+  pending: string
   owed: string
   status: string
 }
@@ -42,7 +42,7 @@ const alertList = ref<RechargeAlert[]>([
     avatar: '',
     ownerName: '店主名称占位符',
     available: '0.00',
-    frozen: '123.45',
+    pending: '123.45',
     owed: '123.45',
     status: '预付款不足'
   },
@@ -50,7 +50,7 @@ const alertList = ref<RechargeAlert[]>([
     avatar: '',
     ownerName: '店主名称占位符',
     available: '0.00',
-    frozen: '123.45',
+    pending: '123.45',
     owed: '123.45',
     status: '预付款欠费'
   },
@@ -58,7 +58,7 @@ const alertList = ref<RechargeAlert[]>([
     avatar: '',
     ownerName: '店主名称占位符',
     available: '0.00',
-    frozen: '123.45',
+    pending: '123.45',
     owed: '123.45',
     status: '预付款逾期'
   },
@@ -66,7 +66,7 @@ const alertList = ref<RechargeAlert[]>([
     avatar: '',
     ownerName: '店主名称占位符',
     available: '0.00',
-    frozen: '123.45',
+    pending: '123.45',
     owed: '123.45',
     status: '预付款不足'
   }

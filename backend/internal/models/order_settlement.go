@@ -42,6 +42,27 @@ type OrderSettlement struct {
 	SettledAt           *time.Time      `gorm:"comment:结算时间" json:"settled_at"`
 	Remark              string          `gorm:"size:500;not null;default:'';comment:备注" json:"remark"`
 
+	// 调账预留字段（最多3次，写入同一结算记录）
+	AdjustmentCount     int8            `gorm:"not null;default:0;comment:已发生调账次数(0~3)" json:"adjustment_count"`
+	Adj1Amount          decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第1次调账金额" json:"adj1_amount"`
+	Adj1PlatformShare   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第1次调账-平台分成" json:"adj1_platform_share"`
+	Adj1OperatorShare   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第1次调账-运营分成" json:"adj1_operator_share"`
+	Adj1ShopOwnerShare  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第1次调账-店主分成" json:"adj1_shop_owner_share"`
+	Adj1At              *time.Time      `gorm:"comment:第1次调账时间" json:"adj1_at"`
+	Adj1Remark          string          `gorm:"size:200;not null;default:'';comment:第1次调账备注" json:"adj1_remark"`
+	Adj2Amount          decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第2次调账金额" json:"adj2_amount"`
+	Adj2PlatformShare   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第2次调账-平台分成" json:"adj2_platform_share"`
+	Adj2OperatorShare   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第2次调账-运营分成" json:"adj2_operator_share"`
+	Adj2ShopOwnerShare  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第2次调账-店主分成" json:"adj2_shop_owner_share"`
+	Adj2At              *time.Time      `gorm:"comment:第2次调账时间" json:"adj2_at"`
+	Adj2Remark          string          `gorm:"size:200;not null;default:'';comment:第2次调账备注" json:"adj2_remark"`
+	Adj3Amount          decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第3次调账金额" json:"adj3_amount"`
+	Adj3PlatformShare   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第3次调账-平台分成" json:"adj3_platform_share"`
+	Adj3OperatorShare   decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第3次调账-运营分成" json:"adj3_operator_share"`
+	Adj3ShopOwnerShare  decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:第3次调账-店主分成" json:"adj3_shop_owner_share"`
+	Adj3At              *time.Time      `gorm:"comment:第3次调账时间" json:"adj3_at"`
+	Adj3Remark          string          `gorm:"size:200;not null;default:'';comment:第3次调账备注" json:"adj3_remark"`
+
 	CreatedAt           time.Time       `gorm:"autoCreateTime;comment:创建时间" json:"created_at"`
 	UpdatedAt           time.Time       `gorm:"autoUpdateTime;comment:更新时间" json:"updated_at"`
 }
@@ -92,9 +113,9 @@ type OrderShipmentRecord struct {
 	TotalCost           decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:总成本" json:"total_cost"`
 	Currency            string          `gorm:"size:10;not null;default:'TWD';comment:货币代码" json:"currency"`
 
-	// 预付款冻结信息
-	FrozenAmount        decimal.Decimal `gorm:"type:decimal(15,2);not null;default:0.00;comment:冻结金额" json:"frozen_amount"`
-	FrozenTransactionID uint64          `gorm:"not null;default:0;comment:冻结流水ID" json:"frozen_transaction_id"`
+	// 预付款信息（订单入系统时已扣除）
+	PrepaymentAmount decimal.Decimal `gorm:"type:decimal(15,2);column:prepayment_amount;not null;default:0.00;comment:预付款金额" json:"prepayment_amount"`
+	DeductTxID       uint64          `gorm:"column:deduct_tx_id;not null;default:0;comment:扣款流水ID" json:"deduct_tx_id"`
 
 	// 发货信息
 	ShippingCarrier     string          `gorm:"size:100;not null;default:'';comment:物流承运商" json:"shipping_carrier"`

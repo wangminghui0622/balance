@@ -86,7 +86,7 @@ func (s *AccountService) GetPrepaymentBalance(ctx context.Context, adminID int64
 	if err != nil {
 		return decimal.Zero, decimal.Zero, err
 	}
-	return account.Balance, account.FrozenAmount, nil
+	return account.Balance, account.PendingAmount, nil
 }
 
 // RechargePrepayment 预付款充值
@@ -176,7 +176,7 @@ func (s *AccountService) FreezePrepaymentInTx(db *gorm.DB, ctx context.Context, 
 
 		balanceBefore := account.Balance
 		account.Balance = account.Balance.Sub(amount)
-		account.FrozenAmount = account.FrozenAmount.Add(amount)
+		account.PendingAmount = account.PendingAmount.Add(amount)
 
 		if err := innerTx.Save(&account).Error; err != nil {
 			return err
@@ -200,16 +200,16 @@ func (s *AccountService) FreezePrepaymentInTx(db *gorm.DB, ctx context.Context, 
 	return tx, err
 }
 
-// UnfreezePrepayment 解冻预付款 (订单取消时调用)
-// 独立事务版本
-func (s *AccountService) UnfreezePrepayment(ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
-	return s.UnfreezePrepaymentInTx(s.db, ctx, adminID, amount, orderSN, remark)
+// RefundPrepayment 返还预付款（发货前取消/退货退款时调用）
+// 订单入系统时已扣除预付款，取消或退款时将金额加回店铺老板预付款账户
+func (s *AccountService) RefundPrepayment(ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	return s.RefundPrepaymentInTx(s.db, ctx, adminID, amount, orderSN, remark)
 }
 
-// UnfreezePrepaymentInTx 解冻预付款（事务参与版本）
-func (s *AccountService) UnfreezePrepaymentInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+// RefundPrepaymentInTx 返还预付款（事务参与版本）
+func (s *AccountService) RefundPrepaymentInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
 	if amount.LessThanOrEqual(decimal.Zero) {
-		return nil, fmt.Errorf("解冻金额必须大于0")
+		return nil, fmt.Errorf("返还金额必须大于0")
 	}
 
 	var tx *models.AccountTransaction
@@ -219,13 +219,13 @@ func (s *AccountService) UnfreezePrepaymentInTx(db *gorm.DB, ctx context.Context
 			return fmt.Errorf("预付款账户不存在")
 		}
 
-		if account.FrozenAmount.LessThan(amount) {
-			return fmt.Errorf("冻结金额不足")
+		if account.PendingAmount.LessThan(amount) {
+			return fmt.Errorf("待结算金额不足，无法返还")
 		}
 
 		balanceBefore := account.Balance
 		account.Balance = account.Balance.Add(amount)
-		account.FrozenAmount = account.FrozenAmount.Sub(amount)
+		account.PendingAmount = account.PendingAmount.Sub(amount)
 
 		if err := innerTx.Save(&account).Error; err != nil {
 			return err
@@ -235,7 +235,7 @@ func (s *AccountService) UnfreezePrepaymentInTx(db *gorm.DB, ctx context.Context
 			TransactionNo:   s.GenerateTransactionNo(models.AccountTypePrepayment),
 			AccountType:     models.AccountTypePrepayment,
 			AdminID:         adminID,
-			TransactionType: models.TxTypeUnfreeze,
+			TransactionType: models.TxTypeOrderRefund,
 			Amount:          amount,
 			BalanceBefore:   balanceBefore,
 			BalanceAfter:    account.Balance,
@@ -266,12 +266,12 @@ func (s *AccountService) SettlePrepaymentInTx(db *gorm.DB, ctx context.Context, 
 			return fmt.Errorf("预付款账户不存在")
 		}
 
-		if account.FrozenAmount.LessThan(amount) {
+		if account.PendingAmount.LessThan(amount) {
 			return fmt.Errorf("冻结金额不足")
 		}
 
 		balanceBefore := account.Balance
-		account.FrozenAmount = account.FrozenAmount.Sub(amount)
+		account.PendingAmount = account.PendingAmount.Sub(amount)
 		account.TotalConsume = account.TotalConsume.Add(amount)
 
 		if err := tx.Save(&account).Error; err != nil {
@@ -284,6 +284,44 @@ func (s *AccountService) SettlePrepaymentInTx(db *gorm.DB, ctx context.Context, 
 			AdminID:         adminID,
 			TransactionType: models.TxTypeOrderPay,
 			Amount:          amount.Neg(),
+			BalanceBefore:   balanceBefore,
+			BalanceAfter:    account.Balance,
+			RelatedOrderSN:  orderSN,
+			Remark:          remark,
+		}
+		return s.createTransaction(tx, at)
+	})
+
+	return at, err
+}
+
+// RefundPrepaymentAdjustmentInTx 调账返还预付款（事务参与版本）
+// 当虾皮调账扣款时，将多扣的金额返还给店铺老板预付款账户
+func (s *AccountService) RefundPrepaymentAdjustmentInTx(db *gorm.DB, ctx context.Context, adminID int64, amount decimal.Decimal, orderSN string, remark string) (*models.AccountTransaction, error) {
+	if amount.LessThanOrEqual(decimal.Zero) {
+		return nil, fmt.Errorf("返还金额必须大于0")
+	}
+
+	var at *models.AccountTransaction
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var account models.PrepaymentAccount
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("admin_id = ?", adminID).First(&account).Error; err != nil {
+			return fmt.Errorf("预付款账户不存在")
+		}
+
+		balanceBefore := account.Balance
+		account.Balance = account.Balance.Add(amount)
+
+		if err := tx.Save(&account).Error; err != nil {
+			return err
+		}
+
+		at = &models.AccountTransaction{
+			TransactionNo:   s.GenerateTransactionNo(models.AccountTypePrepayment),
+			AccountType:     models.AccountTypePrepayment,
+			AdminID:         adminID,
+			TransactionType: models.TxTypeAdjustmentRefund,
+			Amount:          amount,
 			BalanceBefore:   balanceBefore,
 			BalanceAfter:    account.Balance,
 			RelatedOrderSN:  orderSN,
@@ -903,7 +941,7 @@ func (s *AccountService) ApplyWithdraw(ctx context.Context, adminID int64, accou
 	return application, nil
 }
 
-// freezeForWithdraw 冻结提现金额
+// freezeForWithdraw 提现申请时暂扣金额
 func (s *AccountService) freezeForWithdraw(ctx context.Context, adminID int64, accountType string, amount decimal.Decimal) error {
 	return s.db.Transaction(func(db *gorm.DB) error {
 		switch accountType {
@@ -917,7 +955,7 @@ func (s *AccountService) freezeForWithdraw(ctx context.Context, adminID int64, a
 				return fmt.Errorf("余额不足")
 			}
 			account.Balance = account.Balance.Sub(amount)
-			account.FrozenAmount = account.FrozenAmount.Add(amount)
+			account.PendingAmount = account.PendingAmount.Add(amount)
 			return db.Save(&account).Error
 
 		case models.AccountTypeShopOwnerCommission:
@@ -930,7 +968,7 @@ func (s *AccountService) freezeForWithdraw(ctx context.Context, adminID int64, a
 				return fmt.Errorf("余额不足")
 			}
 			account.Balance = account.Balance.Sub(amount)
-			account.FrozenAmount = account.FrozenAmount.Add(amount)
+			account.PendingAmount = account.PendingAmount.Add(amount)
 			return db.Save(&account).Error
 
 		case models.AccountTypeDeposit:
@@ -978,7 +1016,7 @@ func (s *AccountService) RejectWithdraw(ctx context.Context, applicationID uint6
 			return fmt.Errorf("提现申请不存在或已处理")
 		}
 
-		// 解冻金额
+		// 返还暂扣金额（拒绝时加回余额）
 		if err := s.unfreezeForWithdraw(ctx, application.AdminID, application.AccountType, application.Amount); err != nil {
 			return err
 		}
@@ -993,7 +1031,7 @@ func (s *AccountService) RejectWithdraw(ctx context.Context, applicationID uint6
 	})
 }
 
-// unfreezeForWithdraw 解冻提现金额
+// unfreezeForWithdraw 提现拒绝时返还暂扣金额
 func (s *AccountService) unfreezeForWithdraw(ctx context.Context, adminID int64, accountType string, amount decimal.Decimal) error {
 	return s.db.Transaction(func(db *gorm.DB) error {
 		switch accountType {
@@ -1004,7 +1042,7 @@ func (s *AccountService) unfreezeForWithdraw(ctx context.Context, adminID int64,
 				return err
 			}
 			account.Balance = account.Balance.Add(amount)
-			account.FrozenAmount = account.FrozenAmount.Sub(amount)
+			account.PendingAmount = account.PendingAmount.Sub(amount)
 			return db.Save(&account).Error
 
 		case models.AccountTypeShopOwnerCommission:
@@ -1014,7 +1052,7 @@ func (s *AccountService) unfreezeForWithdraw(ctx context.Context, adminID int64,
 				return err
 			}
 			account.Balance = account.Balance.Add(amount)
-			account.FrozenAmount = account.FrozenAmount.Sub(amount)
+			account.PendingAmount = account.PendingAmount.Sub(amount)
 			return db.Save(&account).Error
 
 		case models.AccountTypeDeposit:
@@ -1065,7 +1103,7 @@ func (s *AccountService) completeWithdraw(ctx context.Context, adminID int64, ac
 				return err
 			}
 			balanceBefore = account.Balance
-			account.FrozenAmount = account.FrozenAmount.Sub(amount)
+			account.PendingAmount = account.PendingAmount.Sub(amount)
 			account.TotalWithdrawn = account.TotalWithdrawn.Add(amount)
 			if err := db.Save(&account).Error; err != nil {
 				return err
@@ -1078,7 +1116,7 @@ func (s *AccountService) completeWithdraw(ctx context.Context, adminID int64, ac
 				return err
 			}
 			balanceBefore = account.Balance
-			account.FrozenAmount = account.FrozenAmount.Sub(amount)
+			account.PendingAmount = account.PendingAmount.Sub(amount)
 			account.TotalWithdrawn = account.TotalWithdrawn.Add(amount)
 			if err := db.Save(&account).Error; err != nil {
 				return err
@@ -1102,7 +1140,7 @@ func (s *AccountService) completeWithdraw(ctx context.Context, adminID int64, ac
 			TransactionType: models.TxTypeWithdraw,
 			Amount:          amount.Neg(),
 			BalanceBefore:   balanceBefore,
-			BalanceAfter:    balanceBefore, // 提现不影响可用余额（已冻结）
+			BalanceAfter:    balanceBefore, // 提现不影响可用余额（申请时已暂扣）
 			Remark:          fmt.Sprintf("提现申请: %s", applicationNo),
 		}
 		return s.createTransaction(db, tx)

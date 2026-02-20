@@ -40,8 +40,14 @@
       <div class="user-info">
         <div class="user-info-content">
           <div class="user-info-left">
-            <div class="user-name">{{ userName }}</div>
-            <div class="user-account">账户: {{ userAccount }}</div>
+            <template v-if="(userId ?? '') !== ''">
+              <div class="user-name">账号: {{ userName }}</div>
+              <div class="user-account user-id" :title="String(userId)">id: {{ userId }}</div>
+            </template>
+            <template v-else>
+              <div class="user-name">{{ userName }}</div>
+              <div class="user-account">账户: {{ userAccount }}</div>
+            </template>
           </div>
           <div class="user-info-right">
             <el-popover
@@ -123,12 +129,14 @@ interface Props {
   menuItems: MenuItem[]
   userName?: string
   userAccount?: string
+  userId?: string | number
   messageCount?: number
 }
 
 withDefaults(defineProps<Props>(), {
   userName: 'Hector',
   userAccount: '1234567890',
+  userId: undefined,
   messageCount: 4
 })
 
@@ -262,6 +270,9 @@ const handleLogout = async () => {
 .user-account {
   font-size: 12px;
   color: #909399;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .user-info-right {

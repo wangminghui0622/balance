@@ -145,7 +145,7 @@ func (s *SettlementService) SettleOrder(ctx context.Context, shopID uint64, orde
 // 预付款在订单 READY_TO_SHIP 时已冻结，发货不转托管，结算直接按 orders_x/发货记录分账，不操作托管账户
 func (s *SettlementService) executeSettlementInTx(outerTx *gorm.DB, ctx context.Context, settlement *models.OrderSettlement, shipmentRecord *models.OrderShipmentRecord) error {
 	// 1. 从店铺老板冻结金额中扣除 (结算预付款消耗，与 orders_x 一致)
-	_, err := s.accountService.SettlePrepaymentInTx(outerTx, ctx, settlement.ShopOwnerID, shipmentRecord.FrozenAmount, settlement.OrderSN,
+	_, err := s.accountService.SettlePrepaymentInTx(outerTx, ctx, settlement.ShopOwnerID, shipmentRecord.PrepaymentAmount, settlement.OrderSN,
 		fmt.Sprintf("订单结算-成本%s", settlement.TotalCost.String()))
 	if err != nil {
 		return fmt.Errorf("扣除店铺老板预付款失败: %w", err)
@@ -229,7 +229,7 @@ func (s *SettlementService) ProcessShopeeSettlement(ctx context.Context) (int, e
 		}
 
 		for _, record := range records {
-			// 检查 Shopee 是否已结算 (通过 finance_incomes 分表)
+			// 检查 Shopee 是否已结算 (通过 finance_incomes 分表，仅作触发条件)
 			financeTable := database.GetFinanceIncomeTableName(record.ShopID)
 			var income models.FinanceIncome
 			err := s.db.Table(financeTable).Where("order_sn = ? AND transaction_type = ?", record.OrderSN, models.TransactionTypeEscrowVerifiedAdd).First(&income).Error
@@ -242,8 +242,23 @@ func (s *SettlementService) ProcessShopeeSettlement(ctx context.Context) (int, e
 				continue
 			}
 
-			// 执行结算
-			_, err = s.SettleOrder(ctx, record.ShopID, record.OrderSN, income.Amount)
+			// 结算金额以 orders_x.prepayment_amount 为准（订单入系统时已扣的预付款）
+			orderTable := database.GetOrderTableName(record.ShopID)
+			var order models.Order
+			if err := s.db.Table(orderTable).Where("shop_id = ? AND order_sn = ?", record.ShopID, record.OrderSN).
+				Select("prepayment_amount").First(&order).Error; err != nil {
+				continue
+			}
+			escrowAmount := order.PrepaymentAmount
+			if !escrowAmount.IsPositive() {
+				escrowAmount = record.PrepaymentAmount
+			}
+			if !escrowAmount.IsPositive() {
+				escrowAmount = income.Amount
+			}
+
+			// 执行结算（按 prepayment_amount 分账）
+			_, err = s.SettleOrder(ctx, record.ShopID, record.OrderSN, escrowAmount)
 			if err != nil {
 				continue
 			}
@@ -302,76 +317,100 @@ func (s *SettlementService) ProcessShopeeAdjustments(ctx context.Context) (int, 
 	return adjustedCount, nil
 }
 
-// handleAdjustment 处理单个调账记录（全部在一个事务内原子完成）
+// handleAdjustment 处理单个调账记录（写入原结算单的 adj1/adj2/adj3 预留字段，最多3次）
 func (s *SettlementService) handleAdjustment(ctx context.Context, income *models.FinanceIncome) error {
 	settlementTable := database.GetOrderSettlementTableName(income.ShopID)
-
-	// 查找原始结算记录
-	var originalSettlement models.OrderSettlement
-	err := s.db.Table(settlementTable).Where("order_sn = ? AND status = ?", income.OrderSN, models.OrderSettlementCompleted).First(&originalSettlement).Error
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil
-		}
-		return err
-	}
 
 	adjustAmount := income.Amount
 	if adjustAmount.IsZero() {
 		return nil
 	}
 
-	hundred := decimal.NewFromInt(100)
-	platformAdjust := adjustAmount.Mul(originalSettlement.PlatformShareRate).Div(hundred).Round(2)
-	operatorAdjust := adjustAmount.Mul(originalSettlement.OperatorShareRate).Div(hundred).Round(2)
-	shopOwnerAdjust := adjustAmount.Sub(platformAdjust).Sub(operatorAdjust)
-
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		// 1. 创建调账结算记录
-		adjustmentSettlement := &models.OrderSettlement{
-			SettlementNo:       s.GenerateSettlementNo(),
-			ShopID:             income.ShopID,
-			OrderSN:            income.OrderSN,
-			OrderID:            originalSettlement.OrderID,
-			ShopOwnerID:        originalSettlement.ShopOwnerID,
-			OperatorID:         originalSettlement.OperatorID,
-			Currency:           originalSettlement.Currency,
-			EscrowAmount:       adjustAmount,
-			GoodsCost:          decimal.Zero,
-			ShippingCost:       decimal.Zero,
-			TotalCost:          decimal.Zero,
-			Profit:             adjustAmount,
-			PlatformShareRate:  originalSettlement.PlatformShareRate,
-			OperatorShareRate:  originalSettlement.OperatorShareRate,
-			ShopOwnerShareRate: originalSettlement.ShopOwnerShareRate,
-			PlatformShare:      platformAdjust,
-			OperatorShare:      operatorAdjust,
-			ShopOwnerShare:     shopOwnerAdjust,
-			OperatorIncome:     operatorAdjust,
-			Status:             models.OrderSettlementPending,
-			Remark:             fmt.Sprintf("虾皮调账: %s", income.TransactionType),
+		// 1. 查找原结算记录并加锁
+		var original models.OrderSettlement
+		if err := tx.Table(settlementTable).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("order_sn = ? AND status = ?", income.OrderSN, models.OrderSettlementCompleted).
+			First(&original).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil // 无原结算则跳过
+			}
+			return err
 		}
 
-		if err := tx.Table(settlementTable).Create(adjustmentSettlement).Error; err != nil {
-			return fmt.Errorf("创建调账结算记录失败: %w", err)
+		if original.AdjustmentCount >= 3 {
+			return fmt.Errorf("该订单调账已达3次上限")
 		}
 
-		// 2. 执行调账资金划转（使用 InTx 版本，复用同一事务）
-		if err := s.executeAdjustmentInTx(tx, ctx, adjustmentSettlement); err != nil {
-			return fmt.Errorf("执行调账失败: %w", err)
+		hundred := decimal.NewFromInt(100)
+		platformAdjust := adjustAmount.Mul(original.PlatformShareRate).Div(hundred).Round(2)
+		operatorAdjust := adjustAmount.Mul(original.OperatorShareRate).Div(hundred).Round(2)
+		shopOwnerAdjust := adjustAmount.Sub(platformAdjust).Sub(operatorAdjust)
+		adjRemark := fmt.Sprintf("虾皮调账: %s", income.TransactionType)
+
+		// 2. 执行调账资金划转
+		adjSettlement := &models.OrderSettlement{
+			OrderSN:     income.OrderSN,
+			ShopOwnerID: original.ShopOwnerID,
+			OperatorID:  original.OperatorID,
+			EscrowAmount: adjustAmount,
+			PlatformShare: platformAdjust,
+			OperatorShare: operatorAdjust,
+			ShopOwnerShare: shopOwnerAdjust,
+		}
+		if err := s.executeAdjustmentInTx(tx, ctx, adjSettlement); err != nil {
+			return fmt.Errorf("执行调账: %w", err)
 		}
 
-		// 3. 更新状态为已完成
+		// 3. 写入对应的 adjN 预留字段
 		now := time.Now()
-		return tx.Table(settlementTable).Where("id = ?", adjustmentSettlement.ID).Updates(map[string]interface{}{
-			"status":     models.OrderSettlementCompleted,
-			"settled_at": &now,
-		}).Error
+		slot := original.AdjustmentCount + 1
+		updates := map[string]interface{}{
+			"adjustment_count": slot,
+		}
+		switch slot {
+		case 1:
+			updates["adj1_amount"] = adjustAmount
+			updates["adj1_platform_share"] = platformAdjust
+			updates["adj1_operator_share"] = operatorAdjust
+			updates["adj1_shop_owner_share"] = shopOwnerAdjust
+			updates["adj1_at"] = now
+			updates["adj1_remark"] = adjRemark
+		case 2:
+			updates["adj2_amount"] = adjustAmount
+			updates["adj2_platform_share"] = platformAdjust
+			updates["adj2_operator_share"] = operatorAdjust
+			updates["adj2_shop_owner_share"] = shopOwnerAdjust
+			updates["adj2_at"] = now
+			updates["adj2_remark"] = adjRemark
+		case 3:
+			updates["adj3_amount"] = adjustAmount
+			updates["adj3_platform_share"] = platformAdjust
+			updates["adj3_operator_share"] = operatorAdjust
+			updates["adj3_shop_owner_share"] = shopOwnerAdjust
+			updates["adj3_at"] = now
+			updates["adj3_remark"] = adjRemark
+		}
+
+		return tx.Table(settlementTable).Where("id = ?", original.ID).Updates(updates).Error
 	})
 }
 
 // executeAdjustmentInTx 执行调账资金划转（复用调用方事务）
+// 当调账为扣款（负数）时，需将扣款金额返还给店铺老板预付款账户
 func (s *SettlementService) executeAdjustmentInTx(outerTx *gorm.DB, ctx context.Context, settlement *models.OrderSettlement) error {
+	// 0. 调账扣款时：返还金额到店铺老板预付款（虾皮多扣了，需退还给店主）
+	if settlement.EscrowAmount.LessThan(decimal.Zero) {
+		refundAmount := settlement.EscrowAmount.Abs()
+		if refundAmount.GreaterThan(decimal.Zero) {
+			_, err := s.accountService.RefundPrepaymentAdjustmentInTx(outerTx, ctx, settlement.ShopOwnerID, refundAmount, settlement.OrderSN,
+				fmt.Sprintf("虾皮调账返还-退%s至预付款", refundAmount.String()))
+			if err != nil {
+				return fmt.Errorf("返还预付款失败: %w", err)
+			}
+		}
+	}
+
 	// 1. 调整运营账户
 	if !settlement.OperatorShare.IsZero() {
 		if settlement.OperatorShare.GreaterThan(decimal.Zero) {
